@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Python tests (no network)
+        run: python -m pytest -q
+      - name: JavaScript syntax check
+        run: for f in $(find web -name '*.js'); do node --check "$f"; done
+      - name: JavaScript tests
+        run: for f in tests/web/*.mjs; do node "$f"; done
