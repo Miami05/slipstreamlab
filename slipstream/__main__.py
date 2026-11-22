@@ -22,10 +22,18 @@ def main(argv=None) -> int:
     s.add_argument("--race", required=True, help="slug, e.g. 2026-21-las-vegas")
     s.add_argument("--video", action="store_true", help="also write an animated MP4 (or GIF without ffmpeg)")
 
+    c = sub.add_parser("clean-cache", help="delete raw downloads (~150 MB/race) of races already built")
+    c.add_argument("--all", dest="everything", action="store_true",
+                   help="delete ALL cached downloads, also for races not built yet")
+    c.add_argument("--dry-run", action="store_true", help="only show what would be deleted")
+
     args = ap.parse_args(argv)
     if args.cmd == "build":
         from .build import build
         build(args.year, rnd=args.round, latest=args.latest, refresh=args.refresh)
+    elif args.cmd == "clean-cache":
+        from .cleancache import run
+        run(everything=args.everything, dry_run=args.dry_run)
     else:
         from .social import render_race
         render_race(args.race, video=args.video)

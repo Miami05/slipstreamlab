@@ -40,6 +40,10 @@ python3 -m http.server -d web 8000
 
 # 3. Make social media images (and --video for an animated version)
 .venv/bin/python -m slipstream social --race 2026-21-las-vegas
+
+# 4. Free disk space: raw downloads are ~150 MB per race; the website only
+#    needs web/data (~70 KB per race). Deletes downloads of races already built.
+.venv/bin/python -m slipstream clean-cache            # add --dry-run to preview, --all for everything
 ```
 
 The first build of a race takes a few minutes because the free data API is
