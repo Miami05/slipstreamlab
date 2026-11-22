@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import openf1
+from . import conditions, openf1
 
 
 # A lap is dropped if the telemetry has a hole longer than this. Normal spacing
@@ -167,6 +167,15 @@ class RaceData:
     stops: list = field(default_factory=list)
     _tele: dict = field(default_factory=dict)
     _lapkey: dict = field(default_factory=dict)
+    # optional extras (None / empty when OpenF1 had nothing or the request failed)
+    weather: pd.DataFrame | None = None       # rainfall flag, track temperature (epoch column added)
+    intervals: pd.DataFrame | None = None     # raw OpenF1 intervals
+    notes: list = field(default_factory=list)  # things that went missing (printed as NOTE by build)
+    rc_failed: bool = False                    # race_control could not be loaded: flags unknown
+    rain_windows: list = field(default_factory=list)
+    wet_fleet: set = field(default_factory=set)
+    finish_time: float | None = None
+    traffic: dict | None = None               # {(driver, lap): share of lap < 1.5 s behind the car in front}
 
     # -- convenience --------------------------------------------------------
     @property
@@ -281,6 +290,13 @@ def load_race(session: dict) -> RaceData:
     ttl = openf1.recent_ttl(session)       # results of a race that just ended are provisional
     g = lambda ep: openf1.get(ep, {"session_key": key},
                               max_age=ttl if ep in ("laps", "session_result") else None)
+    notes: list = []
+
+    def opt(ep: str, what: str):
+        """Optional endpoint: a failure is noted, the build goes on without it."""
+        before = len(notes)
+        rows = openf1.get_optional(ep, {"session_key": key}, what=what, notes=notes)
+        return rows, len(notes) > before
 
     drv = pd.DataFrame(g("drivers")).drop_duplicates("driver_number")
     last = drv.last_name.fillna("").astype(str)
@@ -296,10 +312,20 @@ def load_race(session: dict) -> RaceData:
     stints = pd.DataFrame(g("stints"))
     pits = pd.DataFrame(g("pit"))
     result = pd.DataFrame(g("session_result"))
-    rc = pd.DataFrame(g("race_control"))
-    for col in ("flag", "scope", "sector"):
+    rc_rows, rc_failed = opt("race_control", "race control (safety car, yellow and blue flags)")
+    rc = pd.DataFrame(rc_rows)
+    for col in ("date", "message", "category", "flag", "scope", "sector", "driver_number", "lap_number"):
         if col not in rc:
-            rc[col] = None
+            rc[col] = pd.Series(dtype=object)
+    if rc_failed:
+        notes.append("without race control, safety-car, yellow and blue-flag laps cannot be left out: "
+                     "every finding gets low confidence")
+    weather_rows, _ = opt("weather", "weather (rain)")
+    weather = pd.DataFrame(weather_rows) if weather_rows else None
+    if weather is not None and "date" in weather:
+        weather["epoch"] = [to_epoch(v) for v in weather.date]
+    interval_rows, _ = opt("intervals", "intervals (gap to the car in front)")
+    intervals = pd.DataFrame(interval_rows) if interval_rows else None
 
     result = _normalize_result(result)
     pits = _normalize_pits(pits)
@@ -339,7 +365,8 @@ def load_race(session: dict) -> RaceData:
 
     stints = normalize_stints(stints, laps)
     rd = RaceData(session=session, drivers=drv, laps=laps, stints=stints, pits=pits,
-                  result=result, rc=rc, total_laps=total_laps, race_start=race_start)
+                  result=result, rc=rc, total_laps=total_laps, race_start=race_start,
+                  weather=weather, intervals=intervals, notes=notes, rc_failed=rc_failed)
     rd._lapkey = {(int(r.driver_number), int(r.lap_number)): i for i, r in laps.iterrows()}
 
     _build_windows(rd)
@@ -496,6 +523,7 @@ def _flag_laps(rd: RaceData) -> None:
             in_lap = int(hit.lap_number.iloc[0]) - 1
         _mark(rd, dn, in_lap, "pit_in")
         _mark(rd, dn, in_lap + 1, "pit_out")
+    conditions.mark_laps(rd)
 
 
 def _mark(rd: RaceData, dn: int, lap: int, col: str) -> None:
@@ -511,6 +539,19 @@ def usable_lap(r, *, allow_yellow: bool = False) -> bool:
     if r.yellow and not allow_yellow:
         return False
     return bool(np.isfinite(r.t0) and np.isfinite(r.t1))
+
+
+def analysis_lap(r, *, blue: bool = True) -> bool:
+    """A usable lap that is also fit for tyre and energy analysis: not wet (or just after rain),
+    not the lap of the chequered flag and, with blue=True, not under a blue flag (being lapped).
+
+    Energy detection passes blue=False and drops only the *lift* features of blue-flag laps: a
+    lapped driver eases off to let the leader by, but a speed fall at full throttle is not that."""
+    if not usable_lap(r):
+        return False
+    if getattr(r, "wet", False) or getattr(r, "finish", False):
+        return False
+    return not (blue and getattr(r, "blue", False))
 
 
 def _build_stops(rd: RaceData) -> None:

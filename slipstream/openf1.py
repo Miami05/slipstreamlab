@@ -19,11 +19,19 @@ BASE = "https://api.openf1.org/v1/"
 MIN_INTERVAL = 2.1
 TIMEOUT = 60
 MAX_RETRIES = 6
+# A 422 (or another transient client error such as 408/425) from OpenF1 is usually a hiccup:
+# retry this many times (with back-off) before giving up.
+HTTP_RETRIES = 2
+TRANSIENT_CLIENT_CODES = (408, 422, 425)
 USER_AGENT = "SlipstreamLab/0.1 (open-source fan project)"
 
 CACHE_DIR = Path(os.environ.get("SLIPSTREAM_CACHE") or Path(__file__).resolve().parent.parent / ".cache" / "openf1")
 
 _last_request = 0.0
+
+
+class OpenF1Error(RuntimeError):
+    """An OpenF1 request failed for good (after the retries)."""
 
 # Cache freshness -----------------------------------------------------------
 # * REFRESH: when True every request bypasses the disk cache once per URL
@@ -143,6 +151,7 @@ def get(endpoint: str, params: dict | None = None, *, cache_dir: Path | None = N
         _refetched.add(url)
 
     delay = 4.0
+    client_errors = 0
     for attempt in range(MAX_RETRIES):
         wait = MIN_INTERVAL - (time.monotonic() - _last_request)
         if wait > 0:
@@ -164,6 +173,16 @@ def get(endpoint: str, params: dict | None = None, *, cache_dir: Path | None = N
                 time.sleep(delay)
                 delay = min(delay * 2, 60)
                 continue
+            if e.code in TRANSIENT_CLIENT_CODES and client_errors < HTTP_RETRIES:
+                client_errors += 1
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+                continue
+            if e.code in TRANSIENT_CLIENT_CODES:
+                if stale is not None:
+                    print(f"  NOTE: could not refresh {endpoint} (HTTP {e.code}); using the older cached copy", flush=True)
+                    return stale
+                raise OpenF1Error(f"OpenF1 request failed (HTTP {e.code}) after {HTTP_RETRIES} retries: {url}") from e
             raise
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
             time.sleep(delay)
@@ -173,7 +192,7 @@ def get(endpoint: str, params: dict | None = None, *, cache_dir: Path | None = N
         if stale is not None:
             print(f"  NOTE: could not refresh {endpoint}; using the older cached copy", flush=True)
             return stale
-        raise RuntimeError(f"OpenF1 request failed after retries: {url}")
+        raise OpenF1Error(f"OpenF1 request failed after retries: {url}")
 
     if not data:  # never cache empty answers: a bad filter must not stick forever
         return stale if stale is not None else data
@@ -182,3 +201,19 @@ def get(endpoint: str, params: dict | None = None, *, cache_dir: Path | None = N
     tmp.write_text(json.dumps(data))
     tmp.replace(path)
     return data
+
+
+def get_optional(endpoint: str, params: dict | None = None, *, what: str | None = None, notes: list | None = None, **kw):
+    """Like get(), for data the analysis can do without (weather, intervals, race_control, location).
+
+    If the request still fails after the retries, print a NOTE (and add it to `notes`) and return [].
+    The required endpoints (laps, drivers, session_result) keep using get() and fail loudly.
+    """
+    try:
+        return get(endpoint, params, **kw)
+    except (OpenF1Error, urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+        msg = f"{what or endpoint} data could not be loaded ({type(e).__name__}); continuing without it"
+        print(f"  NOTE: {msg}", flush=True)
+        if notes is not None:
+            notes.append(msg)
+        return []

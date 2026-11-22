@@ -1,4 +1,4 @@
-"""Command line: python -m slipstream build|social ..."""
+"""Command line: python -m slipstream build|social|evaluate ..."""
 from __future__ import annotations
 
 import argparse
@@ -27,10 +27,16 @@ def main(argv=None) -> int:
                    help="delete ALL cached downloads, also for races not built yet")
     c.add_argument("--dry-run", action="store_true", help="only show what would be deleted")
 
+    e = sub.add_parser("evaluate", help="compare web/data findings with the checked real-world cases")
+    e.add_argument("--strict", action="store_true", help="exit 1 if a wrong case is still wrong or a plausible case was lost")
+
     args = ap.parse_args(argv)
     if args.cmd == "build":
         from .build import build
         build(args.year, rnd=args.round, latest=args.latest, refresh=args.refresh)
+    elif args.cmd == "evaluate":
+        from .evaluate import run as evaluate_run
+        return evaluate_run(strict=args.strict)
     elif args.cmd == "clean-cache":
         from .cleancache import run
         run(everything=args.everything, dry_run=args.dry_run)

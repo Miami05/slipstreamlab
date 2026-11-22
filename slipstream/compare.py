@@ -23,9 +23,11 @@ def fetch_lap_path(rd: model.RaceData, dn: int, lap: int):
     r = rd.lap_row(dn, lap)
     if r is None or not (np.isfinite(r.t0) and np.isfinite(r.t1)):
         return None
-    rows = openf1.get("location", {"session_key": rd.key, "driver_number": int(dn),
-                                   "date>": openf1.iso_utc(r.t0 - LAP_MARGIN_S),
-                                   "date<": openf1.iso_utc(r.t1 + LAP_MARGIN_S)})
+    # optional: without position data there is simply no track comparison
+    rows = openf1.get_optional("location", {"session_key": rd.key, "driver_number": int(dn),
+                                            "date>": openf1.iso_utc(r.t0 - LAP_MARGIN_S),
+                                            "date<": openf1.iso_utc(r.t1 + LAP_MARGIN_S)},
+                               what="car position (location)")
     if len(rows) < 60:
         return None
     t = np.array([model.to_epoch(x["date"]) for x in rows]) - r.t0

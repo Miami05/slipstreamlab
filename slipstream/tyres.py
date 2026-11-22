@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import model
+from . import conditions, model
 
 FUEL_START_KG = 70.0
 FUEL_S_PER_KG = 0.03
@@ -25,6 +25,8 @@ SLOW_FACTOR = 1.07
 MIN_FIT_LAPS = 6
 MIN_WEAR_LAPS = 10
 WEAR_RISE_S = 0.7          # sustained rise (s) before we call it tyre wear
+MIN_HIGH_LAPS = 5          # "high" confidence needs at least this many clean laps of evidence
+MIN_TRAFFIC_DROP_LAPS = 5  # slow laps spent behind another car (most of them): at least this many = traffic, not tyres
 
 
 def fuel_kg(lap: int, total_laps: int) -> float:
@@ -44,15 +46,19 @@ def fuel_correct(lap, dur, total_laps: int):
     return np.asarray(dur, dtype=float) - FUEL_S_PER_KG * fuel
 
 
-def clean_laps(rd: model.RaceData) -> pd.DataFrame:
-    """One row per clean lap: driver, lap, stint, compound, tyre_age, dur, corr."""
+def clean_laps(rd: model.RaceData, analysis: bool = True) -> pd.DataFrame:
+    """One row per clean lap: driver, lap, stint, compound, tyre_age, dur, corr.
+
+    With analysis=True (tyre-wear detection) wet laps (and the 2 after), laps under a blue flag
+    and the lap of the chequered flag are left out as well (model.analysis_lap). The what-if keeps
+    analysis=False: it was not part of the accuracy fixes and its numbers must not move."""
     rows = []
     st = rd.stints.sort_values(["driver_number", "stint_number"])
     for dn, grp in st.groupby("driver_number"):
         for s in grp.to_dict("records"):
             for lap in range(model.as_int(s["lap_start"]), model.as_int(s["lap_end"], model.as_int(s["lap_start"])) + 1):
                 r = rd.lap_row(int(dn), lap)
-                if r is None or not model.usable_lap(r) or not np.isfinite(r.dur):
+                if r is None or not (model.analysis_lap(r) if analysis else model.usable_lap(r)) or not np.isfinite(r.dur):
                     continue
                 rows.append({"driver": int(dn), "lap": lap, "stint": model.as_int(s["stint_number"]),
                              "compound": str(s["compound"]),
@@ -162,12 +168,30 @@ def _rolling_median3(a: np.ndarray) -> np.ndarray:
     return out
 
 
+def wet_adjacent_stints(stints: pd.DataFrame) -> set[tuple[int, int]]:
+    """{(driver, stint_number)} of stints on rain tyres and of the stints just before / after one.
+
+    A change to or from intermediate/wet tyres means the weather changed; a slow-down at the
+    end of the stint that led to it (or a quick one right after it) is not tyre wear.
+    """
+    out: set[tuple[int, int]] = set()
+    for dn, grp in stints.sort_values(["driver_number", "stint_number"]).groupby("driver_number"):
+        rows = grp.to_dict("records")
+        wet = [conditions.is_wet_compound(r["compound"]) for r in rows]
+        for i, r in enumerate(rows):
+            if wet[i] or (i > 0 and wet[i - 1]) or (i + 1 < len(rows) and wet[i + 1]):
+                out.add((int(dn), int(r["stint_number"])))
+    return out
+
+
 def detect_wear(rd: model.RaceData, df: pd.DataFrame, fits: list[Fit]) -> list[WearFinding]:
     findings = []
     field_med = df.groupby("lap")["corr"].median()
+    wet_adj = wet_adjacent_stints(rd.stints)
+    traffic = getattr(rd, "traffic", None)
     for (dn, stint), g in df.groupby(["driver", "stint"]):
         g = g.sort_values("lap")
-        if len(g) < MIN_WEAR_LAPS:
+        if len(g) < MIN_WEAR_LAPS or (int(dn), int(stint)) in wet_adj:
             continue
         laps = g.lap.to_numpy()
         y = g["corr"].to_numpy(float)
@@ -194,8 +218,20 @@ def detect_wear(rd: model.RaceData, df: pd.DataFrame, fits: list[Fit]) -> list[W
         pts = (2 if rise >= 1.5 else 1 if rise >= 1.0 else 0) + (1 if n_after >= 8 else 0) + \
               (1 if fit and fit.r2 >= 0.5 else 0)
         conf = "high" if pts >= 3 else ("medium" if pts == 2 else "low")
+        slow_laps = [int(l) for l in laps[j:]]
+        in_tr = [conditions.in_traffic(traffic.get((int(dn), l))) for l in slow_laps] if traffic is not None else []
+        n_tr = int(sum(in_tr))
+        traffic_most = bool(in_tr) and n_tr >= 0.5 * len(in_tr)
+        if traffic_most and n_tr >= MIN_TRAFFIC_DROP_LAPS:
+            continue            # stuck behind another car for most of the "wear": that is traffic, not tyres
+        n_clean = n_after - n_tr
         why = (f"lap times rose by about {rise:.1f} s from lap {int(laps[j])} and stayed slower "
                f"for {n_after} clean laps, after taking fuel burn into account")
+        if traffic_most:
+            conf = "low"
+            why += "; he was close behind another car for most of those laps, so it may be traffic and not the tyres"
+        if conf == "high" and n_clean < MIN_HIGH_LAPS:
+            conf = "medium"      # too few clean laps of evidence for "high"
         if np.isfinite(f_rise) and f_rise >= 0.5 * rise:
             conf = "low"
             why += "; other drivers also slowed down then, so it may not be only the tyres"
@@ -203,7 +239,8 @@ def detect_wear(rd: model.RaceData, df: pd.DataFrame, fits: list[Fit]) -> list[W
                                     rise, conf, why,
                                     {"stint": int(stint), "compound": str(g.compound.iloc[0]),
                                      "stint_laps": [int(laps[0]), int(laps[-1])],
-                                     "base": base, "field_rise": f_rise,
+                                     "base": base, "field_rise": f_rise, "n_clean": int(n_clean),
+                                     "traffic_laps": n_tr,
                                      "slope": fit.slope if fit else None}))
     # Several cars "wearing out" on the same lap points to a common cause
     # (traffic, a restart, weather), not to tyres: be honest and lower confidence.

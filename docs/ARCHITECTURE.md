@@ -35,6 +35,9 @@ OpenF1 API ────► │ openf1.py  → model.py → energy.py  ┐       
 | `slipstream/openf1.py` | HTTP client: cache, rate limiting, retries. |
 | `slipstream/model.py` | Loads a race into tidy tables; marks safety-car / pit / lap-1 laps to exclude. |
 | `slipstream/energy.py` | Finds "battery ran low" and "saving energy" moments from speed/throttle/brake. |
+| `slipstream/conditions.py` | Rain, blue-flag, chequered-flag and traffic marks per lap (what to leave out of tyre / energy analysis). |
+| `slipstream/powercut.py` | Sustained speed deficit against the teammate = "probably a car problem". |
+| `slipstream/evaluate.py` | `python -m slipstream evaluate`: compares findings with the checked cases in `tests/validation_cases.json`. |
 | `slipstream/tyres.py` | Fuel-corrected lap times and tyre wear per stint. |
 | `slipstream/whatif.py` | "What if the stop happened on another lap?" estimates with honest ranges. |
 | `slipstream/compare.py` | Two drivers' laps on a track map, who was faster where. |

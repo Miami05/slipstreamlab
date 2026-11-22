@@ -18,7 +18,8 @@ Both are compared with two baselines, so we never flag normal behaviour:
 A finding must beat BOTH by a clear margin.
 
 Laps under safety car / VSC, yellow flags, the restart lap, lap 1 and pit
-in/out laps are never used.
+in/out laps are never used; neither are wet laps (and 2 after), laps under a blue flag
+(being lapped) and the lap of the chequered flag (model.analysis_lap; for blue-flag laps only the lift features are dropped).
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import model
+from . import conditions, model
 
 NBINS = 1000
 FULL = 98.0                 # throttle % counted as "flat out"
@@ -38,6 +39,7 @@ MIN_LIFT_EXCESS_S = 0.55    # ... and how much more than both baselines
 MIN_BASELINE_LAPS = 6
 MAX_STEP_DROP = 15.0        # km/h lost in one sample = braking/glitch, not clipping
 PERSISTENT_SHARE = 0.5      # loss on at least this share of his clean laps there: mentioned in `why` (information only)
+MIN_HIGH_LAPS = 5           # "high" confidence needs at least this many flagged laps of evidence
 MIN_POST_SAMPLES = 3        # samples after the peak (~0.8 s) needed to judge a fall
 
 
@@ -98,7 +100,7 @@ def collect_traces(rd: model.RaceData) -> dict:
     """{(driver, lap): trace} for every usable lap."""
     traces = {}
     for r in rd.laps.itertuples():
-        if not model.usable_lap(r):
+        if not model.analysis_lap(r, blue=False):
             continue
         tr = rd.lap_trace(int(r.driver_number), int(r.lap_number))
         if tr is not None:
@@ -228,7 +230,7 @@ def lift_feature(tr: dict, s: Straight) -> dict | None:
 # ----------------------------------------------------------------------------
 
 def detect(rd: model.RaceData, traces: dict | None = None, straights: list[Straight] | None = None,
-           gaps: dict | None = None) -> tuple[list[Finding], dict]:
+           gaps: dict | None = None, traffic: dict | None = None) -> tuple[list[Finding], dict]:
     """Return (findings, context). `context` carries traces/straights for charts."""
     quality = telemetry_quality(rd)
     if quality > MAX_REPEATED_SPEED:
@@ -243,12 +245,27 @@ def detect(rd: model.RaceData, traces: dict | None = None, straights: list[Strai
             l = lift_feature(tr, s)
             if c or l:
                 feats[(dn, lap, s.idx)] = {"clip": c, "lift": l}
+    # A driver being lapped (blue flag) eases off to let the leader by: no lift finding from those laps.
+    blue = ({(int(d), int(l)) for d, l, b in zip(rd.laps.driver_number, rd.laps.lap_number, rd.laps.blue) if b}
+            if "blue" in rd.laps else set())
+    drop_blue_lifts(feats, blue)
     ctx["feats"] = feats
-    findings = detect_from_features(rd, feats, straights, gaps=gaps)
+    findings = detect_from_features(rd, feats, straights, gaps=gaps, traffic=traffic)
     return findings, ctx
 
 
-def detect_from_features(rd, feats: dict, straights: list[Straight], gaps: dict | None = None) -> list[Finding]:
+def drop_blue_lifts(feats: dict, blue: set) -> None:
+    """A driver under a blue flag (being lapped) eases off to let the leader by: remove the lift
+    feature of those laps (his full-throttle speed fall is kept, that is not a driver action)."""
+    for (dn, lap, si), v in feats.items():
+        if v["lift"] and (dn, lap) in blue:
+            v["lift"] = None
+
+
+def detect_from_features(rd, feats: dict, straights: list[Straight], gaps: dict | None = None,
+                         traffic: dict | None = None) -> list[Finding]:
+    """`traffic` = {(driver, lap): share of the lap < 1.5 s behind a car} (OpenF1 intervals) or None.
+    With it, a lift in traffic is one confidence step lower; without it the lap-timestamp proxy `gaps` is used."""
     findings: list[Finding] = []
     drivers = sorted({k[0] for k in feats})
     for s in straights:
@@ -277,12 +294,13 @@ def detect_from_features(rd, feats: dict, straights: list[Straight], gaps: dict 
                 base = max(field_lift, own)
                 flagged = {lap: x - base for lap, x in l_laps.items()
                            if x >= MIN_LIFT_S and x - base >= MIN_LIFT_EXCESS_S}
-                findings += _group(rd, "energy_saving", dn, s, flagged, mine, l_laps, base, field_lift, own, gaps)
+                findings += _group(rd, "energy_saving", dn, s, flagged, mine, l_laps, base, field_lift, own, gaps,
+                                   traffic=traffic)
     return findings
 
 
 def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_base, own, gaps,
-           persistent_share: float = 0.0) -> list[Finding]:
+           persistent_share: float = 0.0, traffic: dict | None = None) -> list[Finding]:
     """Turn flagged laps into findings; neighbouring laps become one finding."""
     if not flagged:
         return []
@@ -309,11 +327,22 @@ def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_ba
         conf = "high" if pts >= 3 else ("medium" if pts == 2 else "low")
         notes = []
         gap = None
-        if gaps is not None:
+        in_traffic = None
+        if kind == "energy_saving" and traffic is not None:
+            # Intervals say whether he was right behind a car on this lap: lifting then is no
+            # surprise. One step lower (not a hard cap); this replaces the lap-timestamp proxy.
+            share = traffic.get((dn, best))
+            in_traffic = conditions.in_traffic(share)
+            if in_traffic:
+                notes.append("he was close behind another car, which can explain the lift")
+                conf = _LOWER[conf]
+        elif gaps is not None:
             gap = gaps.get((dn, best))
             if gap is not None and gap < 1.0:
                 notes.append("another car was close ahead, which can explain it")
                 conf = _cap(conf, "medium" if gap >= 0.5 else "low")
+        if conf == "high" and n < MIN_HIGH_LAPS:
+            conf = "medium"            # too few flagged laps of evidence for "high"
         if len(raw) < 10:
             conf = _cap(conf, "medium")
         persistent = kind == "battery_low" and persistent_share >= PERSISTENT_SHARE
@@ -339,12 +368,13 @@ def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_ba
             why += "; " + notes[0]
         out.append(Finding(kind, dn, best, g, s.idx, score, conf, why,
                            {"value": float(val), "base": float(base), "field": float(field_base),
-                            "own": float(own), "unit": unit, "n_laps": n, "gap_ahead": gap,
+                            "own": float(own), "unit": unit, "n_laps": n, "gap_ahead": gap, "in_traffic": in_traffic,
                             "persistent": persistent, "persistent_share": float(persistent_share)}))
     return out
 
 
 _ORDER = {"low": 0, "medium": 1, "high": 2}
+_LOWER = {"high": "medium", "medium": "low", "low": "low"}
 
 
 def _cap(conf: str, cap: str) -> str:

@@ -10,16 +10,16 @@ import numpy as np
 import pandas as pd
 
 from . import compare as cmp
-from . import energy, model, openf1, story, tyres, validate, whatif
+from . import conditions, energy, model, openf1, powercut, story, tyres, validate, whatif
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DATA = ROOT / "web" / "data"
 OUT_DIR = ROOT / "out"
 
 MAX_MOMENTS = 6
-KIND_CAP = {"battery_low": 3, "energy_saving": 2, "tyre_wear": 3}
+KIND_CAP = {"battery_low": 3, "energy_saving": 2, "tyre_wear": 3, "power_cut": 1}
 PER_DRIVER_CAP = 2
-REF_SCORE = {"battery_low": 25.0, "energy_saving": 1.5, "tyre_wear": 1.5}
+REF_SCORE = {"battery_low": 25.0, "energy_saving": 1.5, "tyre_wear": 1.5, "power_cut": 25.0}
 CONF_RANK = {"high": 2, "medium": 1, "low": 0}
 
 
@@ -149,7 +149,8 @@ def _energy_moment(rd, ctx, f):
     if f.kind == "battery_low":
         # `why` quotes the detector's own number; show the same (chart-measured) number everywhere
         why = why.replace(f"fell {f.detail['value']:.0f} km/h", f"fell {value:.0f} km/h", 1)
-    texts = story.speed_moment(f.kind, last, f.lap, value, f.score,
+    kind = "power_cut" if f.detail.get("power_cut") else f.kind     # a sustained loss is a car problem, not a battery
+    texts = story.speed_moment(kind, last, f.lap, value, f.score,
                                rd.drivers.loc[other, "last_name"] if other else None, other_value,
                                persistent=bool(f.detail.get("persistent")))
     series = [{"driver": rd.code(f.driver), "points": my_pts}]
@@ -157,9 +158,9 @@ def _energy_moment(rd, ctx, f):
         series.append({"driver": rd.code(other), "points": other_pts})
     chart = {"type": "speed", "title": texts["chart_title"], "x_label": "Along the straight →",
              "y_label": y_label, "zone": zone, "zone_label": texts["zone_label"], "series": series}
-    return {"driver": f.driver, "lap": f.lap, "kind": f.kind, "confidence": conf, "why": why,
+    return {"driver": f.driver, "lap": f.lap, "kind": kind, "confidence": conf, "why": why,
             "chart": chart, "caption": texts["caption"], "other": other, "texts": texts,
-            "norm": f.score / REF_SCORE[f.kind]}
+            "norm": f.score / REF_SCORE[kind]}
 
 
 def _wear_moment(rd, df, f):
@@ -191,7 +192,9 @@ def select_moments(cands: list[dict]) -> list[dict]:
     for m in ranked:
         if len(chosen) >= MAX_MOMENTS:
             break
-        if per_kind.get(m["kind"], 0) >= KIND_CAP[m["kind"]] or per_driver.get(m["driver"], 0) >= PER_DRIVER_CAP:
+        # the per-kind cap keeps the confident moments varied; low-confidence fill-ins only compete on rank
+        kind_full = m["confidence"] != "low" and per_kind.get(m["kind"], 0) >= KIND_CAP[m["kind"]]
+        if kind_full or per_driver.get(m["driver"], 0) >= PER_DRIVER_CAP:
             continue
         if any(c["driver"] == m["driver"] and c["kind"] == m["kind"] for c in chosen):
             continue
@@ -258,9 +261,20 @@ def _build(year, rnd, latest, out_root, log) -> dict:
 
     # --- detection ----------------------------------------------------------
     gaps = energy.gap_ahead_table(rd)
-    e_findings, ctx = energy.detect(rd, gaps=gaps)
+    e_findings, ctx = energy.detect(rd, gaps=gaps, traffic=rd.traffic)
     if ctx.get("skipped"):
         notes.append(f"energy detection skipped: {ctx['skipped']}")
+    cuts = powercut.apply(rd, e_findings, ctx, rd.traffic)
+    for pc in cuts.values():
+        notes.append(f"{rd.code(pc.driver)}: slower than his teammate by {abs(pc.vs_mate):.0f} km/h on "
+                     f"{pc.share:.0%} of clean laps from lap {pc.start_lap} (power loss)")
+    if not cuts:
+        notes.append("no sustained power loss (against the teammate) found for any driver")
+    if rd.weather is None:
+        notes.append("no weather data: rain is read from rain tyres and field pace only")
+    if rd.traffic is None:
+        notes.append("no intervals data: traffic is not checked (old lap-timestamp proxy only)")
+    notes.extend(n for n in rd.notes if n not in notes)
     df = tyres.clean_laps(rd)
     fits = tyres.stint_fits(df)
     w_findings = tyres.detect_wear(rd, df, fits)
@@ -274,6 +288,9 @@ def _build(year, rnd, latest, out_root, log) -> dict:
         m = _wear_moment(rd, df, f)
         if m:
             cands.append(m)
+    if rd.rc_failed:
+        for m in cands:
+            m["confidence"] = "low"        # flags unknown: safety-car / yellow / blue-flag laps were not left out
     chosen = select_moments(cands)
 
     # --- race.json ----------------------------------------------------------
@@ -290,8 +307,9 @@ def _build(year, rnd, latest, out_root, log) -> dict:
     sc_laps = rd.safety_car_laps()
     win_dn = results[0][0]
     gap = winning_margin(rd.result)
+    win_rain = conditions.rain_laps_of(rd, win_dn)
     head = story.headline(rd.drivers.loc[win_dn, "last_name"], gap, sc_laps, len(moments),
-                          vsc_laps=rd.safety_car_laps("VSC"))
+                          vsc_laps=rd.safety_car_laps("VSC"), rain_laps=win_rain, total_laps=rd.total_laps)
     date = model.local_date(session)          # the circuit's local date, not the UTC one
     race = {"slug": slug, "name": name, "location": location, "date": date,
             "total_laps": rd.total_laps, "drivers": drivers,
@@ -299,7 +317,9 @@ def _build(year, rnd, latest, out_root, log) -> dict:
             "safety_car_laps": sc_laps, "headline": head, "moments": moments}
 
     # --- whatif.json --------------------------------------------------------
-    wi = whatif.run(rd, df, fits)
+    # the what-if uses every clean lap as before (rain / blue-flag laps are only left out of the findings)
+    df_wi = tyres.clean_laps(rd, analysis=False)
+    wi = whatif.run(rd, df_wi, tyres.stint_fits(df_wi))
     pit_method = wi.pop("_pit_loss_method")
     wi["drivers"] = {c: d for c, d in wi["drivers"].items() if c in {x["code"] for x in drivers}}
 

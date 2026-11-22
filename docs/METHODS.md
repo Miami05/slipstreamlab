@@ -11,13 +11,20 @@ confidence level.
 * All data comes from [OpenF1](https://openf1.org) (`api.openf1.org/v1`), free
   and without login, for **non-commercial** use. We respect its limits
   (about 3 requests/s and 30/min): the client waits at least 2.1 s between
-  uncached requests, retries with back-off on 429/5xx, and caches every answer
+  uncached requests, retries with back-off on 429/5xx (and twice on a transient
+  422/408/425), and caches every answer
   on disk (`.cache/openf1/<sha1 of the URL>.json`, git-ignored). Results of a
   race that ended less than 48 hours ago are provisional (penalties, late
   corrections), so its `session_result` and `laps` files expire after one hour
   (if the refresh fails, the older copy is used and a note is printed).
   `build --refresh` ignores the cache for that whole race and downloads it
   again (slow: minutes, car data included).
+* **Required** endpoints (`laps`, `drivers`, `stints`, `pit`, `session_result`) fail the
+  build loudly. **Optional** ones (`weather`, `intervals`, `race_control`, `location`) only print
+  a `NOTE` and the build goes on without them: no weather = rain is read from rain tyres and
+  field pace only; no intervals = traffic is not checked (the old lap-timestamp proxy stays);
+  no race control = safety-car, yellow and blue-flag laps cannot be left out, so every
+  finding is shown with low confidence; no location = no track comparison.
 * We do **not** redistribute raw OpenF1 data. `web/data/` holds only derived
   results (a few hundred points per chart) and is git-ignored; raw telemetry
   never leaves the local cache.
@@ -57,6 +64,32 @@ closes at the message saying the session resumed (or runs to the end if none
 comes); its laps are neutral and the first green lap after it is a restart lap.
 *(Red-flag message formats could not be checked against real data, neither
 cached race has one; the logic is covered by synthetic tests only.)*
+**Laps left out of tyre and energy analysis as well** (`model.analysis_lap`; the what-if and
+compare screens still use every green lap):
+
+* **Rain.** A lap is wet if the OpenF1 `weather` rainfall flag was on during it, if the driver
+  was on intermediate or wet tyres, or if at least 25 % of the cars still running were on rain
+  tyres. For each wet spell that starts after the first laps we also walk back from its first
+  lap while the field's median lap time is at least 1 s above its earlier level, because the
+  track gets wet before anyone changes tyres (Brazil 2026: the rainfall flag only came on at
+  lap 63, but the field slowed from lap 58 and rain tyres appeared on lap 61). A wet lap and the
+  2 laps after it are left out. We do not use track temperature: the OpenF1 values jump by 10 °C
+  and drop to 0 before the race, which makes it a worse rain signal than the rainfall flag.
+  If it rained the headline says so.
+* **Blue flags.** A blue flag message for a driver (he is being lapped) is matched by time stamp
+  to his own lap (the message's `lap_number` is the leader's lap). His laps +-1 are left out of
+  tyre analysis; in energy analysis only his *lift* features are dropped (a lapped driver eases
+  off to let the leader by), not full-throttle speed falls.
+* **Chequered flag.** The lap during which the flag came out (the last lap of everybody) is
+  left out: cars ease off and nothing there is racing data. In the United States 2026 race
+  Alonso's flagged "energy saving" lift on lap 55 was this lap (no safety car or yellow flag was
+  active; he was a lap down and took the flag at the end of it).
+
+**Traffic** (OpenF1 `intervals`) does not remove laps, it explains them. OpenF1 only publishes an
+interval when it changes, so the value is held until the next row, but not longer than 60 s
+(older = unknown). A lap is "in traffic" when the driver spent at least half of it less than
+1.5 s behind the car in front. The leader and cars a lap down ("+1 LAP") are never in traffic.
+
 A pit stop marks the in-lap (OpenF1's own `lap_number` of the stop) and the
 following out-lap; the first flying lap on the new tyres is a normal lap. Laps whose
 telemetry has a hole longer than 1.2 s are dropped. Braking readings that
@@ -109,20 +142,59 @@ problem looks the same, so the label is "Lost power (maybe battery)".
    can also mean a car problem. It does not change the confidence: on an
    energy-starved track repeated losses are normal.
 
+9. **Sustained power loss (`power_cut`).** See the next section: a battery finding of a driver
+   who was slower than his teammate for most of the race after it is relabelled.
+
 *Limits:* a fall at full throttle can also come from wind, tow loss, a car
 ahead, a different set-up, or from the sparse sampling near the braking point.
 We call it "probably", never "certainly". Short falls (< 8 km/h) are ignored.
 
-## Saved energy (`energy_saving`)
+## Had less power for most of the race (`power_cut`)
+
+A battery that runs low costs speed for a few laps. An engine that is turned down (heat, a
+fault) costs speed on *most* laps. Las Vegas 2026 showed why we need to tell them apart: Gasly
+lost power on "most of the 50 laps" because Alpine turned the engine down to manage temperatures,
+while our detector said "battery".
+
+1. For each lap and straight we take each car's **peak speed** and subtract the median peak speed
+   of the whole field on that lap and straight; averaged over the straights this is the lap's
+   deviation (needs at least 6 cars and 2 straights).
+2. For each driver and his teammate we look only at laps both have and where **neither was in
+   traffic** (a tow adds speed: when one car follows and the other does not, the pair shows a
+   "deficit" that is only the tow; we saw exactly that for Hulkenberg against Bortoleto in Las
+   Vegas before adding this rule). With fewer than 10 such laps there is no verdict (Las Vegas:
+   67 % of laps were in traffic, so most drivers cannot be judged there).
+3. From some lap onward he must be **at least 8 km/h below his teammate on at least 70 % of the
+   remaining laps (>= 10 laps)**, the spell must start on such a lap, and his median deviation
+   from the field must be at least 4 km/h negative (so a teammate who is just very fast does not
+   count).
+4. A `battery_low` finding of that driver from that lap on becomes `power_cut` with the label
+   "Had less power for most of the race (probably a car problem)"; confidence is `medium` if the
+   deficit was >= 12 km/h on >= 85 % of the laps, otherwise `low`.
+
+*Limits, honestly:* it cannot see a loss that hits **both** cars of a team (a team-wide setting),
+and set-up differences between teams are too large for a field-only comparison. **It does not
+fire for Gasly in Las Vegas:** he and Colapinto were never both in clean air for 10 laps, and
+on all laps together Gasly was within a few km/h of his teammate and above the field's median on
+every straight (speed trap, peak speed and average speed along the straight all checked), so the
+Alpine power reduction is not visible in the public speed data. That validation case
+stays "wrong" in `evaluate`. The detector fires for none of the 5 cached races; its behaviour is
+covered by synthetic tests.
+
+## Lifted off early (`energy_saving`)
 
 To recharge the battery a driver can lift off the accelerator early and coast
-into the braking zone. We look at each braking zone: how long was the throttle
+into the braking zone. He can also lift to cool the car (Hulkenberg in Mexico: "we struggled with
+temperatures throughout"), and the data cannot tell the two apart, so the label is "Lifted off
+early (probably saving energy or cooling the car)". We look at each braking zone: how long was the throttle
 ~0 (< 10 %) with no brake, after being flat out, just before the brake was
 pressed? A lap is flagged when that is >= 1.0 s and at least 0.55 s more than
 both the circuit median and the driver's own median. The same confidence rules
-and traffic cap apply. With 0.27 s sampling, durations are only good to about
-+-0.3 s. Lifting can also be caused by traffic, yellow flags we cannot see, or
-a mistake; we cannot tell these apart from the numbers.
+apply. If the driver was in traffic on that lap (intervals, see above) the confidence is one
+step lower (without intervals the old lap-timestamp proxy caps it). "High" needs at least
+5 flagged laps in the spell. With 0.27 s sampling, durations are only good to about
++-0.3 s. Lifting can also be caused by traffic, blue flags (those laps are left out), yellow
+flags we cannot see, or a mistake; we cannot tell these apart from the numbers.
 
 ## Tyres wore out (`tyre_wear`)
 
@@ -139,6 +211,12 @@ a mistake; we cannot tell these apart from the numbers.
    time at least 0.7 s above that baseline which **stays there until the stint
    ends**. We report the lap where the climb began. Confidence comes from the
    size of the rise, how many laps it lasted and how well a straight line fits.
+   *New (validation fixes):* a stint that is on rain tyres, or directly before or after a
+   stint on rain tyres, never gives a tyre-wear moment (the weather changed; the slow-down at the
+   end of the slick stint that led to the switch is the rain, not the rubber). If the driver was
+   in traffic on most of the slow laps and on at least 5 of them, the finding is dropped (it is
+   traffic); with fewer than 5 such laps it stays but with `low` confidence and says so. "High"
+   needs at least 5 clean (not-in-traffic) slow laps.
    If the field's median lap time rose by half as much or more over the same
    laps (weather, track state), or if two or more other drivers show a rise
    starting on the same lap (traffic, a restart), the confidence is forced to
@@ -148,6 +226,26 @@ a mistake; we cannot tell these apart from the numbers.
 race. In Las Vegas this was stronger than the fuel and tyre effects, so most
 measured slopes were negative; we clamp slopes at zero, which means the
 what-if sees "no measurable tyre wear" there.
+
+## Checking against the real world (`evaluate`)
+
+`tests/validation_cases.json` holds the 19 findings that were checked against driver and team
+statements (docs/VALIDATION.md): race, driver, kind, lap, verdict and, for the wrong ones, the
+true cause. `python -m slipstream evaluate` reads `web/data/*/race.json` and reports for each case
+whether it is *present* (same driver and kind, lap within +-3, same label), *relabelled* (another
+kind that names the true cause) or *gone*. A "wrong" case passes when it is gone or its label names
+the true cause; a "plausible" case passes only when it is still present (losing one is a regression,
+not a win); "unknown" cases are information. `--strict` exits with 1 on any failure.
+
+| | before the fixes | after |
+|---|---|---|
+| wrong cases fixed | 0 / 6 | 5 / 6 (Gasly Las Vegas stays: see power cut) |
+| plausible cases kept | 9 / 9 | 9 / 9 |
+
+Caveats: Hulkenberg (Mexico) is "gone" only because his lift is now in traffic, so its
+confidence fell to low, and low-confidence findings are hidden when at least three confident ones
+exist. Albon (USA) survives only as a low-confidence finding. Removing the confident findings
+lets other low-confidence ones appear that nobody has checked yet.
 
 ## What if? (`whatif.json`)
 

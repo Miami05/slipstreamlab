@@ -9,11 +9,13 @@ import re
 
 # Causes are inferred, never measured: every label is hedged (docs/LEGAL.md). We can see that a
 # car lost power on a straight; the battery is only one possible reason (an engine-temperature
-# limit, for example, looks the same), so the battery label says "maybe".
+# limit, for example, looks the same), so the battery label says "maybe". Lifting off early can be
+# saving energy or cooling the car (a driver said so in Mexico), so the label names both.
 KIND_LABEL = {
     "battery_low": "Lost power (maybe battery)",
-    "energy_saving": "Probably saving energy",
+    "energy_saving": "Lifted off early (probably saving energy or cooling the car)",
     "tyre_wear": "Tyres probably wore out",
+    "power_cut": "Had less power for most of the race (probably a car problem)",
 }
 HEDGE_RE = re.compile(r"\b(probably|likely|maybe|possibly|may be|might)\b", re.I)
 
@@ -63,35 +65,53 @@ def _when_all(runs: list[tuple[int, int]]) -> str:
     return " and again on ".join(_when(a, b) for a, b in runs)
 
 
+def rain_sentence(rain_laps: list[int], total_laps: int) -> str:
+    """One plain sentence about the rain (laps are the winner's laps that were wet)."""
+    runs = lap_runs(rain_laps)
+    if not runs:
+        return ""
+    first, last = runs[0][0], runs[-1][1]
+    if len(runs) == 1 and first <= 2 and last >= total_laps - 1:
+        return "It rained for the whole race, so we left tyre and power readings out."
+    if len(runs) == 1 and last >= total_laps - 1:
+        return f"Rain came on lap {first} and stayed until the end, so we left those laps out of the tyre and power readings."
+    if len(runs) == 1 and first <= 2:
+        return f"The track was wet at the start and dried out by lap {last + 1}, so we left the wet laps out of the tyre and power readings."
+    return (f"Rain came and went, on {_when_all(runs)}, so we left those laps out of the tyre and power readings.")
+
+
 def headline(winner: str, gap_s: float | None, sc_laps: list[int], n_moments: int,
-             vsc_laps: list[int] | None = None) -> dict:
+             vsc_laps: list[int] | None = None, rain_laps: list[int] | None = None,
+             total_laps: int = 0) -> dict:
     if gap_s is None or gap_s <= 0:
         title = f"{winner} won the race."
     else:
         unit = "second" if round(gap_s, 1) == 1.0 else "seconds"
         title = f"{winner} won by {fmt_seconds(gap_s)} {unit}."
-    parts = []
     runs = lap_runs(sc_laps or [])
+    sc = ""
     if len(runs) == 1:
         a, b = runs[0]
-        if a == b:
-            parts.append(f"A safety car came out on lap {a}, which bunched the field up.")
-        else:
-            parts.append(f"A safety car came out on lap {a} and stayed until lap {b}, which bunched the field up.")
+        sc = (f"A safety car came out on lap {a}, which bunched the field up." if a == b else
+              f"A safety car came out on lap {a} and stayed until lap {b}, which bunched the field up.")
     elif runs:
-        parts.append(f"A safety car came out more than once, on {_when_all(runs)}, which bunched the field up.")
+        sc = f"A safety car came out more than once, on {_when_all(runs)}, which bunched the field up."
     vruns = lap_runs(vsc_laps or [])
+    vsc = ""
     if vruns:
         lead = "The whole field was slowed down for a short time" if not runs else \
             "The whole field was also slowed down for a short time"
-        parts.append(f"{lead} on {_when_all(vruns)}.")
+        vsc = f"{lead} on {_when_all(vruns)}."
     if n_moments == 0:
-        parts.append("Nothing in the data stood out clearly enough to explain here.")
+        found = "Nothing in the data stood out clearly enough to explain here."
     elif n_moments == 1:
-        parts.append("We found one moment that likely explains a big change in speed.")
+        found = "We found one moment that likely explains a big change in speed."
     else:
-        parts.append(f"We found {n_moments} moments that likely explain big changes in speed.")
-    return {"title": title, "text": " ".join(parts[:3])}
+        found = f"We found {n_moments} moments that likely explain big changes in speed."
+    parts = [x for x in (sc, rain_sentence(rain_laps or [], total_laps), vsc, found) if x]
+    if len(parts) > 3:
+        parts.remove(vsc)            # at most 3 sentences: the short slow spell matters least
+    return {"title": title, "text": " ".join(parts)}
 
 
 def speed_moment(kind: str, last: str, lap: int, value: float, score: float, other: str | None,
@@ -113,12 +133,26 @@ def speed_moment(kind: str, last: str, lap: int, value: float, score: float, oth
             "social_sentence": f"Flat out, yet {value:.0f} km/h slower before braking.",
             "big": f"-{value:.0f} km/h",
         }
+    if kind == "power_cut":
+        cmp_txt = ""
+        if other and other_value is not None and other_value >= 1:
+            cmp_txt = f" {other} lost {other_value:.0f} km/h on the same stretch."
+        return {
+            "chart_title": f"Where {last} slowed down · lap {lap}",
+            "zone_label": f"{last} slows here",
+            "caption": (f"{last} kept the accelerator flat out, but the car slowed by about {value:.0f} km/h before "
+                        f"braking.{cmp_txt} He was slower than his teammate in a straight line for most of the race, "
+                        "which probably points to a car problem rather than a low battery."),
+            "social_title": f"{last} had less power for most of the race. A car problem is the likely reason.",
+            "social_sentence": f"Flat out, yet {value:.0f} km/h slower before braking.",
+            "big": f"-{value:.0f} km/h",
+        }
     return {
         "chart_title": f"Where {last} came off the accelerator · lap {lap}",
         "zone_label": f"{last} coasts here",
         "caption": (f"{last} came off the accelerator for about {value:.1f} seconds before braking. "
-                    "That probably saved battery energy for later."),
-        "social_title": f"{last} eased off early. Saving energy is the likely reason.",
+                    "That was probably to save battery energy for later, or to cool the car."),
+        "social_title": f"{last} eased off early, probably to save energy or cool the car.",
         "social_sentence": f"{value:.1f} seconds of coasting before the braking point.",
         "big": f"{value:.1f} s",
     }

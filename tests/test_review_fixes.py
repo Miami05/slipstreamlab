@@ -256,12 +256,13 @@ def test_vsc_is_mentioned_next_to_a_safety_car_and_split_into_runs():
 
 def test_every_inferred_cause_is_hedged():
     assert story.KIND_LABEL == {"battery_low": "Lost power (maybe battery)",
-                                "energy_saving": "Probably saving energy",
-                                "tyre_wear": "Tyres probably wore out"}
+                                "energy_saving": "Lifted off early (probably saving energy or cooling the car)",
+                                "tyre_wear": "Tyres probably wore out",
+                                "power_cut": "Had less power for most of the race (probably a car problem)"}
     for label in story.KIND_LABEL.values():
         assert story.is_hedged(label)
     texts = []
-    for kind in ("battery_low", "energy_saving"):
+    for kind in ("battery_low", "energy_saving", "power_cut"):
         for persistent in (False, True):
             d = story.speed_moment(kind, "Leclerc", 34, 28.0, 14.0, "Norris", 3.0, persistent=persistent)
             texts += [d["caption"], d["social_title"]]

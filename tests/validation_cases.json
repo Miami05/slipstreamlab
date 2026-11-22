@@ -1,0 +1,201 @@
+{
+ "_comment": "Checked findings from docs/VALIDATION.md (4 races, 19 findings). Lap tolerance +-3 in evaluate.py. original_* = what the pipeline said before the 2026-11-22 accuracy fixes.",
+ "cases": [
+  {
+   "race": "2026-21-las-vegas",
+   "driver": "RUS",
+   "kind": "battery_low",
+   "lap": 37,
+   "verdict": "plausible",
+   "original_confidence": "high",
+   "original_label": "Lost power (maybe battery)",
+   "note": "Energy mode left him vulnerable in the middle sector"
+  },
+  {
+   "race": "2026-21-las-vegas",
+   "driver": "VER",
+   "kind": "battery_low",
+   "lap": 40,
+   "verdict": "plausible",
+   "original_confidence": "high",
+   "original_label": "Lost power (maybe battery)",
+   "note": "Red Bull: whole race about managing deployment"
+  },
+  {
+   "race": "2026-21-las-vegas",
+   "driver": "BOR",
+   "kind": "energy_saving",
+   "lap": 14,
+   "verdict": "unknown",
+   "original_confidence": "medium",
+   "original_label": "Probably saving energy",
+   "note": "Only 'issues on my car throughout the weekend'"
+  },
+  {
+   "race": "2026-21-las-vegas",
+   "driver": "GAS",
+   "kind": "battery_low",
+   "lap": 6,
+   "verdict": "wrong",
+   "original_confidence": "medium",
+   "original_label": "Lost power (maybe battery)",
+   "true_cause": "engine_power_cut",
+   "note": "Alpine turned the power down ~45 of 50 laps for engine temperatures"
+  },
+  {
+   "race": "2026-18-austin",
+   "driver": "PER",
+   "kind": "energy_saving",
+   "lap": 28,
+   "verdict": "wrong",
+   "original_confidence": "high",
+   "original_label": "Probably saving energy",
+   "true_cause": "blue_flags",
+   "note": "Being lapped, straight into the blue flags"
+  },
+  {
+   "race": "2026-18-austin",
+   "driver": "ALB",
+   "kind": "tyre_wear",
+   "lap": 28,
+   "verdict": "plausible",
+   "original_confidence": "high",
+   "original_label": "Tyres probably wore out",
+   "note": "'I've got no rears' (but also damage)"
+  },
+  {
+   "race": "2026-18-austin",
+   "driver": "RUS",
+   "kind": "tyre_wear",
+   "lap": 32,
+   "verdict": "wrong",
+   "original_confidence": "high",
+   "original_label": "Tyres probably wore out",
+   "true_cause": "traffic",
+   "note": "Stuck behind Oscar, couldn't overtake"
+  },
+  {
+   "race": "2026-18-austin",
+   "driver": "ALO",
+   "kind": "energy_saving",
+   "lap": 55,
+   "verdict": "unknown",
+   "original_confidence": "medium",
+   "original_label": "Probably saving energy",
+   "note": "Only lap-1 floor damage mentioned"
+  },
+  {
+   "race": "2026-18-austin",
+   "driver": "ANT",
+   "kind": "tyre_wear",
+   "lap": 11,
+   "verdict": "plausible",
+   "original_confidence": "medium",
+   "original_label": "Tyres probably wore out",
+   "note": "Pirelli: first-stint degradation as predicted"
+  },
+  {
+   "race": "2026-19-mexico-city",
+   "driver": "HUL",
+   "kind": "energy_saving",
+   "lap": 67,
+   "verdict": "wrong",
+   "original_confidence": "medium",
+   "original_label": "Probably saving energy",
+   "true_cause": "cooling",
+   "note": "Struggled with temperatures throughout: lifting to cool"
+  },
+  {
+   "race": "2026-19-mexico-city",
+   "driver": "LEC",
+   "kind": "energy_saving",
+   "lap": 40,
+   "verdict": "plausible",
+   "original_confidence": "medium",
+   "original_label": "Probably saving energy",
+   "note": "Ferrari managing; no lap-specific quote"
+  },
+  {
+   "race": "2026-19-mexico-city",
+   "driver": "COL",
+   "kind": "tyre_wear",
+   "lap": 19,
+   "verdict": "plausible",
+   "original_confidence": "medium",
+   "original_label": "Tyres probably wore out",
+   "note": "Weak: fits pit timing"
+  },
+  {
+   "race": "2026-19-mexico-city",
+   "driver": "LEC",
+   "kind": "tyre_wear",
+   "lap": 11,
+   "verdict": "plausible",
+   "original_confidence": "medium",
+   "original_label": "Tyres probably wore out",
+   "note": "Weak: Pirelli says degradation within expected levels"
+  },
+  {
+   "race": "2026-19-mexico-city",
+   "driver": "HAM",
+   "kind": "tyre_wear",
+   "lap": 35,
+   "verdict": "plausible",
+   "original_confidence": "medium",
+   "original_label": "Tyres probably wore out",
+   "note": "Weak: same"
+  },
+  {
+   "race": "2026-20-sao-paulo",
+   "driver": "GAS",
+   "kind": "tyre_wear",
+   "lap": 44,
+   "verdict": "wrong",
+   "original_confidence": "high",
+   "original_label": "Tyres probably wore out",
+   "true_cause": "rain",
+   "note": "Rain returned; fresh softs fitted lap 37"
+  },
+  {
+   "race": "2026-20-sao-paulo",
+   "driver": "ALB",
+   "kind": "tyre_wear",
+   "lap": 52,
+   "verdict": "wrong",
+   "original_confidence": "medium",
+   "original_label": "Tyres probably wore out",
+   "true_cause": "rain",
+   "note": "Rain; fresh softs fitted lap 43"
+  },
+  {
+   "race": "2026-20-sao-paulo",
+   "driver": "NOR",
+   "kind": "battery_low",
+   "lap": 55,
+   "verdict": "unknown",
+   "original_confidence": "medium",
+   "original_label": "Lost power (maybe battery)",
+   "note": "No statement about power"
+  },
+  {
+   "race": "2026-20-sao-paulo",
+   "driver": "BOR",
+   "kind": "battery_low",
+   "lap": 30,
+   "verdict": "plausible",
+   "original_confidence": "medium",
+   "original_label": "Lost power (maybe battery)",
+   "note": "Strong: 'limited by 250 kW in the straight'"
+  },
+  {
+   "race": "2026-20-sao-paulo",
+   "driver": "HAD",
+   "kind": "battery_low",
+   "lap": 46,
+   "verdict": "unknown",
+   "original_confidence": "medium",
+   "original_label": "Lost power (maybe battery)",
+   "note": "No statement about power"
+  }
+ ]
+}

@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import re
 
-KINDS = {"battery_low", "energy_saving", "tyre_wear"}
+KINDS = {"battery_low", "energy_saving", "tyre_wear", "power_cut"}
 CONFIDENCE = {"high", "medium", "low"}
 CHART_TYPES = {"speed", "laptime"}
 COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")

@@ -95,9 +95,11 @@ test('moment kinds and confidence', () => {
   assert.equal(kindInfo('energy_saving').fg, '#9CC8FF');
   assert.equal(kindInfo('tyre_wear').label, 'Tyres probably wore out');
   assert.equal(kindInfo('battery_low').label, 'Lost power (maybe battery)');
-  assert.equal(kindInfo('energy_saving').label, 'Probably saving energy');
-  for (const k of ['battery_low', 'energy_saving', 'tyre_wear']) {
+  assert.equal(kindInfo('energy_saving').label, 'Lifted off early (probably saving energy or cooling the car)');
+  assert.equal(kindInfo('power_cut').label, 'Had less power for most of the race (probably a car problem)');
+  for (const k of ['battery_low', 'energy_saving', 'tyre_wear', 'power_cut']) {
     assert.match(kindInfo(k).label, /probably|maybe/i); // inferred causes are always hedged
+    assert.ok(contrastRatio(kindInfo(k).fg, kindInfo(k).bg) >= 4.5, k + ' pill contrast'); // readable pills
   }
   assert.equal(kindInfo('weird', 'Something').label, 'Something');
   assert.deepEqual(['high', 'medium', 'low', undefined].map(confidenceLevel), [3, 2, 1, 1]);

@@ -103,8 +103,9 @@ export function ordinal(n) {
 
 export const KIND_INFO = {
   battery_low: { label: 'Lost power (maybe battery)', bg: '#2E2547', fg: '#C9B6FF' },
-  energy_saving: { label: 'Probably saving energy', bg: '#13283F', fg: '#9CC8FF' },
+  energy_saving: { label: 'Lifted off early (probably saving energy or cooling the car)', bg: '#13283F', fg: '#9CC8FF' },
   tyre_wear: { label: 'Tyres probably wore out', bg: '#2F2A12', fg: '#EBD57A' },
+  power_cut: { label: 'Had less power for most of the race (probably a car problem)', bg: '#3A1A22', fg: '#FFB3C0' },
 };
 
 export function kindInfo(kind, fallbackLabel) {

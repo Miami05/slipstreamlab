@@ -48,7 +48,7 @@ by the session's `gmt_offset`), so a Saturday-night race in Las Vegas is
   "safety_car_laps": [19, 20, 21, 22, 23],
   "headline": {
     "title": "Verstappen won by 0.6 seconds.",
-    "text": "One to three plain-English sentences. No jargon. Separate safety-car spells are named separately (lap 5 to 7 and again on lap 40 to 42)."
+    "text": "One to three plain-English sentences. No jargon. Separate safety-car spells are named separately (lap 5 to 7 and again on lap 40 to 42). If it rained, one sentence says so (\"Rain came and went, on laps 1 to 16 and again on laps 58 to 71, so we left those laps out of the tyre and power readings.\")."
   },
   "moments": [
     {
@@ -78,10 +78,13 @@ by the session's `gmt_offset`), so a Saturday-night race in Las Vegas is
 }
 ```
 
-- `kind` is one of `battery_low`, `energy_saving`, `tyre_wear`.
+- `kind` is one of `battery_low`, `energy_saving`, `tyre_wear`, `power_cut`.
   Website labels: `battery_low` → "Lost power (maybe battery)",
-  `energy_saving` → "Probably saving energy",
-  `tyre_wear` → "Tyres probably wore out". The pipeline also writes `label`.
+  `energy_saving` → "Lifted off early (probably saving energy or cooling the car)",
+  `tyre_wear` → "Tyres probably wore out",
+  `power_cut` → "Had less power for most of the race (probably a car problem)".
+  The pipeline also writes `label` (the website's pill uses its own mapping in
+  `web/assets/common.js` for these four kinds, so both must say the same).
   **Every inferred cause is hedged** ("probably", "likely", "maybe", "may be")
   in labels, zone labels, captions and social titles (docs/LEGAL.md); `build`
   refuses to write a moment whose label or caption is not hedged.
@@ -91,6 +94,16 @@ by the session's `gmt_offset`), so a Saturday-night race in Las Vegas is
   `high`. If the same loss shows up on at least half of the driver's clean laps
   at that place, `why` and `caption` add that it happened on most laps, which
   can also mean a car problem (information only: it does not lower the confidence).
+  `power_cut` (new, 2026-11-22) is a `battery_low` finding of a driver who, from
+  some lap on, was at least 8 km/h slower than his teammate on at least 70 % of the
+  remaining laps (and below the field's median): the speed loss at that moment is
+  real but the cause is probably the car, not the battery. It is drawn like
+  `battery_low` (`chart.type` = `speed`), its confidence is `low` or `medium`, and
+  the per-kind limit (1 per race) only applies to `medium` ones; `low` ones compete on rank like any other low-confidence moment. A page that does not know a kind shows
+  the pipeline's `label` on a grey pill.
+  `energy_saving` can be lowered one confidence step when the driver was less than
+  1.5 s behind the car in front (traffic); `high` of any kind needs at least 5 clean
+  laps of evidence.
 - `confidence` is one of `high`, `medium`, `low`.
 - `why` is a sentence fragment shown after "Why <confidence> confidence: ".
 - `chart.type`:
