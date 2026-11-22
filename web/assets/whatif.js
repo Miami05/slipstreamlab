@@ -32,6 +32,7 @@ function render(data, ctx) {
   const codes = Object.keys(pit)
     .filter((c) => drivers.has(c) && pit[c] && Array.isArray(pit[c].options) && pit[c].options.length)
     .sort((a, b) => (pit[a].real_finish || 99) - (pit[b].real_finish || 99));
+  if (!codes.length && typeof whatif.unavailable === 'string' && whatif.unavailable) throw new EmptyError(whatif.unavailable);
   if (!codes.length) throw new EmptyError('No driver made a normal pit stop under green flags in this race (stops under a safety car are not moved), so there is nothing to try.');
 
   const trackPoints = compare && Array.isArray(compare.pairs) && compare.pairs[0] && validTrack(compare.pairs[0].track)

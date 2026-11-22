@@ -24,7 +24,8 @@ confidence level.
   a `NOTE` and the build goes on without them: no weather = rain is read from rain tyres and
   field pace only; no intervals = traffic is not checked (the old lap-timestamp proxy stays);
   no race control = safety-car, yellow and blue-flag laps cannot be left out, so every
-  finding is shown with low confidence; no location = no track comparison.
+  finding is shown with low confidence (and says so) and **no what-if is offered** (every
+  safety-car stop would look like a green-flag stop); no location = no track comparison.
 * We do **not** redistribute raw OpenF1 data. `web/data/` holds only derived
   results (a few hundred points per chart) and is git-ignored; raw telemetry
   never leaves the local cache.
@@ -62,8 +63,12 @@ safety car that is upgraded to a full safety car is closed when the safety car
 is deployed (it is never announced as "ending"). A red flag opens a window that
 closes at the message saying the session resumed (or runs to the end if none
 comes); its laps are neutral and the first green lap after it is a restart lap.
-*(Red-flag message formats could not be checked against real data, neither
-cached race has one; the logic is covered by synthetic tests only.)*
+The real message shapes come from Mexico City 2026 (the only cached race with a red flag):
+"RED FLAG - RACE SUSPENDED" (category Other, no flag) and SessionStatus "SESSION ABORTED" open
+the window and close any open safety car (the red flag replaces it, so it is never announced as
+ending); only SessionStatus "SESSION STARTED" ends it. "RACE WILL RESUME AT 15:45" is an
+advance notice sent 13 minutes before the restart and does not end it. A race that is never
+restarted stays red until its end. The headline says there was a red flag.
 **Laps left out of tyre and energy analysis as well** (`model.analysis_lap`; the what-if and
 compare screens still use every green lap):
 
@@ -167,7 +172,9 @@ while our detector said "battery".
 3. From some lap onward he must be **at least 8 km/h below his teammate on at least 70 % of the
    remaining laps (>= 10 laps)**, the spell must start on such a lap, and his median deviation
    from the field must be at least 4 km/h negative (so a teammate who is just very fast does not
-   count).
+   count). The spell must also cover **at least half of his shared clean laps**: a deficit that
+   only shows in the last 10 laps is a short problem, not "most of the race". Without intervals
+   data there is no verdict at all (tow laps cannot be left out).
 4. A `battery_low` finding of that driver from that lap on becomes `power_cut` with the label
    "Had less power for most of the race (probably a car problem)"; confidence is `medium` if the
    deficit was >= 12 km/h on >= 85 % of the laps, otherwise `low`.
@@ -244,7 +251,8 @@ not a win); "unknown" cases are information. `--strict` exits with 1 on any fail
 
 Caveats: Hulkenberg (Mexico) is "gone" only because his lift is now in traffic, so its
 confidence fell to low, and low-confidence findings are hidden when at least three confident ones
-exist. Albon (USA) survives only as a low-confidence finding. Removing the confident findings
+exist (the per-kind cap of 3 applies to them too, and the headline counts them apart as "less
+certain"). Albon (USA) survives only as a low-confidence finding. Removing the confident findings
 lets other low-confidence ones appear that nobody has checked yet.
 
 ## What if? (`whatif.json`)
@@ -257,7 +265,10 @@ window at the pit time or over the in-lap and out-lap, and not on a restart lap.
 (Yellow flags are *not* checked for stops.) Earlier stops under a safety car
 and later stops stay as they were; a driver whose only stops were under a
 safety car is not offered (in Las Vegas 2026 that is everybody, so the page
-says there is nothing to try).
+says there is nothing to try). A driver whose first green stop is between a rain tyre
+(intermediate / wet) and a slick is not offered either: only tyre age is modelled, not the grip
+of a drying or wetting track (Brazil 2026: the first stop of everybody was inters to slicks).
+If race control could not be loaded the what-if is skipped (`unavailable` in `whatif.json`).
 
 * **Time gain** comes only from tyre age. For each lap we compare the real tyre
   (compound, age) with the alternative one and multiply the age by the measured

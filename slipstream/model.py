@@ -424,7 +424,7 @@ def normalize_stints(stints: pd.DataFrame, laps: pd.DataFrame) -> pd.DataFrame:
 
 def _build_windows(rd: RaceData) -> None:
     """Safety-car / VSC windows (from race-control messages) and yellow-flag windows."""
-    rc = rd.rc.sort_values("epoch")
+    rc = rd.rc.sort_values("epoch", kind="stable")
     win_driver = int(rd.result.driver_number.iloc[0])
     wl = rd.laps[rd.laps.driver_number == win_driver]
 
@@ -432,9 +432,33 @@ def _build_windows(rd: RaceData) -> None:
         hit = wl[(wl.t0 <= ts) & (wl.t1 > ts)]
         return float(hit.t1.iloc[0]) if len(hit) else ts
 
+    race_end = float(np.nanmax(rd.laps.t1)) if len(rd.laps) else float("nan")
     start = {"SC": None, "VSC": None}
-    for _, r in rc[rc.category == "SafetyCar"].iterrows():
-        msg = str(r.message).upper()
+    red = None
+    # One pass over every race-control row in time order, so a red flag can close an open SC / VSC.
+    # Real shapes (Mexico City 2026): "RED FLAG - RACE SUSPENDED" (category Other, flag None) and
+    # SessionStatus "SESSION ABORTED" open the red window; only SessionStatus "SESSION STARTED" ends
+    # it ("RACE WILL RESUME AT 15:45" is an advance notice sent ~13 minutes before the restart).
+    for _, r in rc.iterrows():
+        msg = str(r.message).upper().strip()
+        cat = str(r.category)
+        if red is None and (
+                (str(r.flag).upper() == "RED" and str(r.get("scope")) in ("Track", "None", "nan"))
+                or msg.startswith("RED FLAG")
+                or (cat == "SessionStatus" and msg == "SESSION ABORTED")):
+            red = r.epoch
+            for kind in ("SC", "VSC"):    # the red flag replaces the safety car: it is never announced as "ending"
+                if start[kind] is not None:
+                    rd.windows.append((kind, start[kind], r.epoch))
+                    start[kind] = None
+            continue
+        if red is not None:
+            if cat == "SessionStatus" and msg == "SESSION STARTED":
+                rd.windows.append(("RED", red, r.epoch))
+                red = None
+            continue                     # safety-car chatter during a red flag changes nothing
+        if cat != "SafetyCar":
+            continue
         kind = "VSC" if ("VSC" in msg or "VIRTUAL" in msg) else "SC"
         if "DEPLOYED" in msg:
             if kind == "SC" and start["VSC"] is not None:
@@ -447,23 +471,10 @@ def _build_windows(rd: RaceData) -> None:
         elif ("IN THIS LAP" in msg or "ENDING" in msg or "ENDED" in msg) and start[kind] is not None:
             rd.windows.append((kind, start[kind], end_of_leader_lap(r.epoch)))
             start[kind] = None
-    race_end = float(np.nanmax(rd.laps.t1)) if len(rd.laps) else float("nan")
     for kind, s in start.items():          # never ended (rare): until the end
         if s is not None:
             rd.windows.append((kind, s, race_end))
-
-    # Red flag: from the red flag to the message that says the race resumes (never resumed: until the end).
-    # Laps in that window are neutral (nobody races), and the first green lap after it is a restart lap.
-    red = None
-    for _, r in rc.iterrows():
-        msg = str(r.message).upper()
-        if red is None:
-            if str(r.flag).upper() == "RED" and str(r.get("scope")) in ("Track", "None", "nan"):
-                red = r.epoch
-        elif "RESUME" in msg or "SESSION STARTED" in msg or "RACE RESTART" in msg:
-            rd.windows.append(("RED", red, r.epoch))
-            red = None
-    if red is not None:
+    if red is not None:                    # never restarted (race abandoned): until the end
         rd.windows.append(("RED", red, race_end))
 
     open_y: dict = {}

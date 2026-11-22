@@ -5,6 +5,8 @@ Assumptions (also in docs/METHODS.md)
 * Only the driver's FIRST stop under green flags (after lap 2; not under a safety
   car, VSC or red flag and not on a restart lap) is moved; everything else
   (second stops, compounds, other drivers) stays as it really happened.
+* A stop between a rain tyre (intermediate / wet) and a slick is never moved: only tyre age is
+  modelled, not the grip of a track that is drying out or getting wet, so that driver is left out.
 * Time gain comes only from tyre age: laps on fresher rubber are faster by the
   measured degradation slope (seconds per lap of age, fuel-corrected, per
   compound, blended with the driver's own slope when reliable).
@@ -29,7 +31,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import model, tyres
+from . import conditions, model, tyres
 
 MIN_HALF_WIDTH = 1.5
 COMPOUND_UNCERTAINTY_S = 0.5     # per lap on a different compound (their base pace gap is not modelled)
@@ -129,6 +131,7 @@ def run(rd: model.RaceData, df=None, fits=None) -> dict:
     final = _final_times(rd, cum)
 
     out = {}
+    skipped_rain = 0
     for dn in sorted(rd.drivers.index):
         gstops = [s for s in rd.stops if s.driver == dn and s.green and 3 <= s.in_lap < N - 1]
         if not gstops or dn not in results:
@@ -139,6 +142,11 @@ def run(rd: model.RaceData, df=None, fits=None) -> dict:
         if k is None or k + 1 >= len(stints):
             continue
         before, after = stints[k], stints[k + 1]
+        if conditions.is_wet_compound(before["compound"]) or conditions.is_wet_compound(after["compound"]):
+            # Only tyre age is modelled, not the grip of a drying or wetting track: a stop between a
+            # rain tyre and a slick is a weather decision and is never moved.
+            skipped_rain += 1
+            continue
         info = ((str(before["compound"]), model.as_int(before["lap_start"]), model.as_int(before.get("tyre_age_at_start"))),
                 (str(after["compound"]), model.as_int(after.get("tyre_age_at_start")), S.in_lap),
                 model.as_int(after["lap_end"]))
@@ -163,7 +171,11 @@ def run(rd: model.RaceData, df=None, fits=None) -> dict:
                             "traffic": bool(traffic), "nearby": nearby})
         if options:
             out[rd.code(dn)] = {"real_pit_lap": int(L), "real_finish": int(results[dn]), "options": options}
-    return {"pit_loss_s": round(float(pit_loss), 1), "drivers": out, "_pit_loss_method": how}
+    res = {"pit_loss_s": round(float(pit_loss), 1), "drivers": out, "_pit_loss_method": how}
+    if not out and skipped_rain:
+        res["unavailable"] = ("The “what if?” is not offered for this race: the first stops were between rain tyres "
+                              "and dry tyres, which depend on the weather and not on how worn the tyres were.")
+    return res
 
 
 def _neutral_laps_leader(rd) -> set:

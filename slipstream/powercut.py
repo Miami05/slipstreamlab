@@ -11,7 +11,10 @@ TEAMMATE's (same lap, so wind and track state cancel) and with the field's media
   such laps = no verdict (in Las Vegas, where 67 % of laps were in traffic, most drivers cannot
   be judged);
 * from some lap onward the driver must be at least 8 km/h below his teammate on at least 70 % of
-  the remaining laps (>= 10 laps), and his median must also be clearly below the field's.
+  the remaining laps (>= 10 laps), and his median must also be clearly below the field's;
+* that spell must cover at least half of the driver's shared clean laps ("most of the race"): a
+  deficit that only shows in the last 10 laps is a short problem, not a sustained one;
+* without intervals data traffic cannot be filtered, so there is no verdict at all.
 
 Any `battery_low` finding of that driver from that lap on is then relabelled `power_cut`.
 
@@ -27,6 +30,7 @@ import numpy as np
 MIN_DROP_KMH = 8.0        # below the teammate by at least this much ...
 MIN_SHARE = 0.7           # ... on at least this share of the remaining laps
 MIN_LAPS = 10             # remaining laps needed
+MIN_COVERAGE = 0.5        # the spell must cover at least this share of the shared clean laps
 MIN_FIELD_DROP_KMH = 4.0  # and the median deviation from the field at least this negative
 MIN_FIELD_CARS = 6        # cars needed to define the field's median on a lap and straight
 MIN_STRAIGHTS = 2         # straights needed to average a lap's deviation
@@ -76,7 +80,8 @@ def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset()) -> PowerCut |
     mine = np.array([dev[(dn, l)] for l in laps])
     diff = mine - np.array([dev[(mate, l)] for l in laps])
     low = diff <= -MIN_DROP_KMH
-    for i in range(0, len(laps) - MIN_LAPS + 1):
+    need = max(MIN_LAPS, int(np.ceil(MIN_COVERAGE * len(laps))))
+    for i in range(0, len(laps) - need + 1):
         if not low[i]:
             continue                        # the spell starts on a lap that shows the deficit
         if low[i:].mean() >= MIN_SHARE and float(np.median(mine[i:])) <= -MIN_FIELD_DROP_KMH:
@@ -101,8 +106,12 @@ def apply(rd, findings: list, ctx: dict, traffic: dict | None = None) -> dict[in
     """Mark battery_low findings that fall inside a sustained power loss (finding.detail["power_cut"])."""
     if not ctx.get("feats"):
         return {}
+    if traffic is None:
+        # No intervals: tow laps cannot be left out, and a tow looks exactly like a power deficit.
+        ctx["power_cuts"] = {}
+        return {}
     dev = lap_deviation(ctx["feats"], ctx["straights"])
-    skip = {k for k, v in (traffic or {}).items() if v >= 0.5}
+    skip = {k for k, v in traffic.items() if v >= 0.5}
     mates = {int(d): rd.teammate(int(d)) for d in rd.drivers.index}
     cuts = detect(dev, mates, skip)
     ctx["power_cuts"] = cuts

@@ -439,7 +439,7 @@ def test_a_battery_finding_after_the_power_loss_started_is_relabelled_but_not_on
                                                     {"value": 30.0})
     before, after = mk(6), mk(20)
     other = energy.Finding("battery_low", 1, 20, [20], 0, 25.0, "medium", "speed fell", {"value": 30.0})
-    cuts = powercut.apply(rd, [before, after, other], ctx, None)
+    cuts = powercut.apply(rd, [before, after, other], ctx, {})
     assert set(cuts) == {3}
     assert "power_cut" not in before.detail and "power_cut" not in other.detail
     assert after.detail["power_cut"]["start_lap"] == 10
@@ -456,14 +456,17 @@ def test_power_cut_is_a_known_kind_with_a_hedged_label_text_and_slot():
     assert "power_cut" in validate.KINDS
 
 
-def test_the_final_selection_only_applies_the_kind_cap_to_confident_moments():
+def test_the_final_selection_applies_the_kind_cap_to_every_moment():
     mk = lambda d, kind, conf, norm: {"driver": d, "kind": kind, "confidence": conf, "norm": norm}
     cands = [mk(1, "tyre_wear", "medium", 2.0), mk(2, "tyre_wear", "medium", 1.9), mk(3, "tyre_wear", "medium", 1.8),
              mk(4, "tyre_wear", "low", 1.0)]
     assert [m["driver"] for m in build.select_moments(cands)] == [1, 2, 3]        # >= 3 confident ones: lows are hidden
     cands = [mk(1, "tyre_wear", "medium", 2.0), mk(2, "tyre_wear", "low", 1.2), mk(3, "tyre_wear", "low", 1.1),
              mk(4, "tyre_wear", "low", 1.0), mk(5, "tyre_wear", "low", 0.9)]
-    assert [m["driver"] for m in build.select_moments(cands)] == [1, 2, 3, 4, 5]   # few confident ones: lows fill in
+    # few confident ones: lows fill in, but at most LOW_KIND_CAP (2) of one kind, so never 5 tyre_wear moments
+    assert [m["driver"] for m in build.select_moments(cands)] == [1, 2, 3]
+    cands += [{"driver": 6, "kind": "battery_low", "confidence": "low", "norm": 0.5}]
+    assert [m["driver"] for m in build.select_moments(cands)] == [1, 2, 3, 6]
 
 
 # --- evaluate ------------------------------------------------------------------------------------------------------

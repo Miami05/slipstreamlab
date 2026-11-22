@@ -80,9 +80,19 @@ def rain_sentence(rain_laps: list[int], total_laps: int) -> str:
     return (f"Rain came and went, on {_when_all(runs)}, so we left those laps out of the tyre and power readings.")
 
 
+def red_sentence(red_laps: list[int]) -> str:
+    runs = lap_runs(red_laps or [])
+    if not runs:
+        return ""
+    if len(runs) == 1:
+        return f"The race was stopped with a red flag on lap {runs[0][0]} and started again later."
+    return f"The race was stopped with a red flag more than once, on {_when_all(runs)}."
+
+
 def headline(winner: str, gap_s: float | None, sc_laps: list[int], n_moments: int,
              vsc_laps: list[int] | None = None, rain_laps: list[int] | None = None,
-             total_laps: int = 0) -> dict:
+             total_laps: int = 0, red_laps: list[int] | None = None, n_low: int = 0) -> dict:
+    """n_moments = all moments shown, n_low = how many of them are low confidence (hedged apart)."""
     if gap_s is None or gap_s <= 0:
         title = f"{winner} won the race."
     else:
@@ -102,15 +112,25 @@ def headline(winner: str, gap_s: float | None, sc_laps: list[int], n_moments: in
         lead = "The whole field was slowed down for a short time" if not runs else \
             "The whole field was also slowed down for a short time"
         vsc = f"{lead} on {_when_all(vruns)}."
+    n_low = max(0, min(n_low, n_moments))
+    n_sure = n_moments - n_low
     if n_moments == 0:
         found = "Nothing in the data stood out clearly enough to explain here."
-    elif n_moments == 1:
-        found = "We found one moment that likely explains a big change in speed."
+    elif n_sure == 0:
+        found = ("We found one moment that may explain a change in speed, but we are not very sure about it."
+                 if n_low == 1 else
+                 f"We found {n_low} moments that may explain changes in speed, but we are not very sure about them.")
     else:
-        found = f"We found {n_moments} moments that likely explain big changes in speed."
-    parts = [x for x in (sc, rain_sentence(rain_laps or [], total_laps), vsc, found) if x]
-    if len(parts) > 3:
-        parts.remove(vsc)            # at most 3 sentences: the short slow spell matters least
+        found = ("We found one moment that likely explains a big change in speed"
+                 if n_sure == 1 else f"We found {n_sure} moments that likely explain big changes in speed")
+        if n_low:
+            found += (", plus one less certain one." if n_low == 1 else f", plus {n_low} less certain ones.")
+        else:
+            found += "."
+    red = red_sentence(red_laps or [])
+    parts = [x for x in (sc, red, rain_sentence(rain_laps or [], total_laps), vsc, found) if x]
+    if len(parts) > (4 if red else 3) and vsc:
+        parts.remove(vsc)            # at most 3 sentences (4 with a red flag): the short slow spell matters least
     return {"title": title, "text": " ".join(parts)}
 
 

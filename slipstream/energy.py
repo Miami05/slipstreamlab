@@ -325,6 +325,11 @@ def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_ba
             pts = 2 if score >= 1.5 else (1 if score >= 1.0 else 0)
         pts += (1 if n >= 2 else 0) + (1 if n >= 4 else 0)
         conf = "high" if pts >= 3 else ("medium" if pts == 2 else "low")
+        if conf == "high" and n < MIN_HIGH_LAPS:
+            conf = "medium"            # too few flagged laps of evidence for "high"
+        if len(raw) < 10:
+            conf = _cap(conf, "medium")
+        # (these caps come first: a traffic / close-car step down must lower the capped level, not be swallowed by it)
         notes = []
         gap = None
         in_traffic = None
@@ -341,10 +346,6 @@ def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_ba
             if gap is not None and gap < 1.0:
                 notes.append("another car was close ahead, which can explain it")
                 conf = _cap(conf, "medium" if gap >= 0.5 else "low")
-        if conf == "high" and n < MIN_HIGH_LAPS:
-            conf = "medium"            # too few flagged laps of evidence for "high"
-        if len(raw) < 10:
-            conf = _cap(conf, "medium")
         persistent = kind == "battery_low" and persistent_share >= PERSISTENT_SHARE
         if kind == "battery_low":
             # The power loss is measured, but its cause cannot be told apart from e.g. an

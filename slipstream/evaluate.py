@@ -116,8 +116,11 @@ def summary(rows: list[dict]) -> dict:
     out = {"present": 0, "relabelled": 0, "gone": 0, "no data": 0}
     for r in rows:
         out[r["status"]] += 1
-    wrong = [r for r in rows if r["verdict"] == "wrong"]
-    plaus = [r for r in rows if r["verdict"] == "plausible"]
+    # a race that is not built is "not built", not a regression: leave it out of the totals
+    built = [r for r in rows if r["status"] != "no data"]
+    wrong = [r for r in built if r["verdict"] == "wrong"]
+    plaus = [r for r in built if r["verdict"] == "plausible"]
+    out["missing_races"] = sorted({r["race"] for r in rows if r["status"] == "no data"})
     out["wrong_total"] = len(wrong)
     out["wrong_fixed"] = sum(1 for r in wrong if r["ok"])
     out["plausible_total"] = len(plaus)
@@ -131,10 +134,10 @@ def run(strict: bool = False, log=print) -> int:
     s = summary(rows)
     log("")
     log(f"present {s['present']}  relabelled {s['relabelled']}  gone {s['gone']}"
-        + (f"  (no race data: {s['no data']})" if s["no data"] else ""))
+        + (f"  (not built, left out: {', '.join(s['missing_races'])})" if s["missing_races"] else ""))
     log(f"wrong cases fixed (gone or relabelled to the true cause): {s['wrong_fixed']} / {s['wrong_total']}")
     log(f"plausible cases still present: {s['plausible_kept']} / {s['plausible_total']}")
-    lost = [r for r in rows if r["verdict"] == "plausible" and not r["ok"]]
+    lost = [r for r in rows if r["verdict"] == "plausible" and r["ok"] is False]
     for r in lost:
         log(f"  REGRESSION: plausible case lost: {r['race']} {r['driver']} {r['kind']} lap {r['lap']}")
     bad = s["wrong_fixed"] < s["wrong_total"] or lost

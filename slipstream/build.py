@@ -18,6 +18,7 @@ OUT_DIR = ROOT / "out"
 
 MAX_MOMENTS = 6
 KIND_CAP = {"battery_low": 3, "energy_saving": 2, "tyre_wear": 3, "power_cut": 1}
+LOW_KIND_CAP = 2          # low-confidence fill-ins: at most this many per kind, counted among themselves
 PER_DRIVER_CAP = 2
 REF_SCORE = {"battery_low": 25.0, "energy_saving": 1.5, "tyre_wear": 1.5, "power_cut": 25.0}
 CONF_RANK = {"high": 2, "medium": 1, "low": 0}
@@ -68,6 +69,10 @@ def _pick_comparison(rd, ctx, f, measure=None, mine=None) -> tuple[int | None, b
     for d in order:
         if (d, f.lap) not in traces:
             continue
+        if f.kind == "energy_saving":
+            r = rd.lap_row(d, f.lap)
+            if r is not None and getattr(r, "blue", False):
+                continue                # lifted for a blue flag: his lift is not "normal"
         if measure is not None:
             o = measure(d)
             if o is None:               # no usable chart line for this car
@@ -106,6 +111,21 @@ def _speed_series(rd, ctx, dn, lap, s):
     grid = np.linspace(x.min(), x.max(), 100)
     y = np.interp(grid, x, tr["speed"][m])
     return [[round(float(a), 4), round(float(b), 1)] for a, b in zip(grid, y)]
+
+
+def chart_why(why: str, f, value: float) -> str:
+    """`why` quotes the detector's own numbers; show the chart-measured drop everywhere, and measure the
+    "more than usual" excess against the same usual drop (detector's drop minus detector's excess), or the
+    excess could be larger than the drop itself."""
+    why = why.replace(f"fell {f.detail['value']:.0f} km/h", f"fell {value:.0f} km/h", 1)
+    usual = f.detail["value"] - f.score
+    return why.replace(f"({f.score:.0f} km/h more than usual", f"({max(value - usual, 0.0):.0f} km/h more than usual", 1)
+
+
+def rc_failed_whatif() -> dict:
+    """whatif.json when race control is missing: every safety-car stop would look like a green-flag stop."""
+    return {"pit_loss_s": 0.0, "drivers": {}, "unavailable": "The “what if?” is not available for this race: "
+            "the race-control flags could not be loaded, so stops under a safety car cannot be told from normal ones."}
 
 
 def _energy_moment(rd, ctx, f):
@@ -148,7 +168,7 @@ def _energy_moment(rd, ctx, f):
                 else "; his teammate coasted there too, so the cause may be shared")
     if f.kind == "battery_low":
         # `why` quotes the detector's own number; show the same (chart-measured) number everywhere
-        why = why.replace(f"fell {f.detail['value']:.0f} km/h", f"fell {value:.0f} km/h", 1)
+        why = chart_why(why, f, value)
     kind = "power_cut" if f.detail.get("power_cut") else f.kind     # a sustained loss is a car problem, not a battery
     texts = story.speed_moment(kind, last, f.lap, value, f.score,
                                rd.drivers.loc[other, "last_name"] if other else None, other_value,
@@ -192,14 +212,17 @@ def select_moments(cands: list[dict]) -> list[dict]:
     for m in ranked:
         if len(chosen) >= MAX_MOMENTS:
             break
-        # the per-kind cap keeps the confident moments varied; low-confidence fill-ins only compete on rank
-        kind_full = m["confidence"] != "low" and per_kind.get(m["kind"], 0) >= KIND_CAP[m["kind"]]
+        # per-kind caps: confident moments up to KIND_CAP, low-confidence fill-ins up to LOW_KIND_CAP
+        # (counted among themselves, so they can never crowd the page with one kind)
+        low = m["confidence"] == "low"
+        key = (m["kind"], low)
+        kind_full = per_kind.get(key, 0) >= (min(LOW_KIND_CAP, KIND_CAP[m["kind"]]) if low else KIND_CAP[m["kind"]])
         if kind_full or per_driver.get(m["driver"], 0) >= PER_DRIVER_CAP:
             continue
         if any(c["driver"] == m["driver"] and c["kind"] == m["kind"] for c in chosen):
             continue
         chosen.append(m)
-        per_kind[m["kind"]] = per_kind.get(m["kind"], 0) + 1
+        per_kind[key] = per_kind.get(key, 0) + 1
         per_driver[m["driver"]] = per_driver.get(m["driver"], 0) + 1
     return chosen
 
@@ -268,7 +291,9 @@ def _build(year, rnd, latest, out_root, log) -> dict:
     for pc in cuts.values():
         notes.append(f"{rd.code(pc.driver)}: slower than his teammate by {abs(pc.vs_mate):.0f} km/h on "
                      f"{pc.share:.0%} of clean laps from lap {pc.start_lap} (power loss)")
-    if not cuts:
+    if rd.traffic is None:
+        notes.append("no intervals data: sustained power loss cannot be judged (tow laps cannot be left out)")
+    elif not cuts:
         notes.append("no sustained power loss (against the teammate) found for any driver")
     if rd.weather is None:
         notes.append("no weather data: rain is read from rain tyres and field pace only")
@@ -291,6 +316,7 @@ def _build(year, rnd, latest, out_root, log) -> dict:
     if rd.rc_failed:
         for m in cands:
             m["confidence"] = "low"        # flags unknown: safety-car / yellow / blue-flag laps were not left out
+            m["why"] += "; race-control flags were unavailable, so safety-car and yellow-flag laps could not be left out"
     chosen = select_moments(cands)
 
     # --- race.json ----------------------------------------------------------
@@ -309,7 +335,9 @@ def _build(year, rnd, latest, out_root, log) -> dict:
     gap = winning_margin(rd.result)
     win_rain = conditions.rain_laps_of(rd, win_dn)
     head = story.headline(rd.drivers.loc[win_dn, "last_name"], gap, sc_laps, len(moments),
-                          vsc_laps=rd.safety_car_laps("VSC"), rain_laps=win_rain, total_laps=rd.total_laps)
+                          vsc_laps=rd.safety_car_laps("VSC"), rain_laps=win_rain, total_laps=rd.total_laps,
+                          red_laps=rd.safety_car_laps("RED"),
+                          n_low=sum(1 for m in moments if m["confidence"] == "low"))
     date = model.local_date(session)          # the circuit's local date, not the UTC one
     race = {"slug": slug, "name": name, "location": location, "date": date,
             "total_laps": rd.total_laps, "drivers": drivers,
@@ -318,10 +346,16 @@ def _build(year, rnd, latest, out_root, log) -> dict:
 
     # --- whatif.json --------------------------------------------------------
     # the what-if uses every clean lap as before (rain / blue-flag laps are only left out of the findings)
-    df_wi = tyres.clean_laps(rd, analysis=False)
-    wi = whatif.run(rd, df_wi, tyres.stint_fits(df_wi))
-    pit_method = wi.pop("_pit_loss_method")
-    wi["drivers"] = {c: d for c, d in wi["drivers"].items() if c in {x["code"] for x in drivers}}
+    if rd.rc_failed:
+        # Without race control every safety-car stop would look like a green-flag stop: no what-if at all.
+        wi = rc_failed_whatif()
+        pit_method = "skipped (no race control)"
+        notes.append("what-if skipped: race control (safety-car flags) unavailable")
+    else:
+        df_wi = tyres.clean_laps(rd, analysis=False)
+        wi = whatif.run(rd, df_wi, tyres.stint_fits(df_wi))
+        pit_method = wi.pop("_pit_loss_method")
+        wi["drivers"] = {c: d for c, d in wi["drivers"].items() if c in {x["code"] for x in drivers}}
 
     # --- compare.json -------------------------------------------------------
     pairs = []

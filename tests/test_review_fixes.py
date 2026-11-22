@@ -82,7 +82,7 @@ def test_red_flag_window_is_neutral_and_next_lap_is_a_restart():
     rd = make_rd(rc_rows=[
         {"date": iso(T0), "message": "SESSION STARTED", "category": "SessionStatus"},
         sc_msg(10, "RED FLAG", category="Flag", flag="RED"),
-        sc_msg(13, "SESSION RESUMED", category="SessionStatus"),
+        sc_msg(13, "SESSION STARTED", category="SessionStatus"),
     ])
     finish_flags(rd)
     assert [k for k, _, _ in rd.windows] == ["RED"]
@@ -507,3 +507,167 @@ def test_sample_data_is_valid_and_hedged():
     for m in race["moments"]:
         assert m["label"] == story.KIND_LABEL[m["kind"]]
         assert story.is_hedged(m["label"]) and story.is_hedged(m["caption"])
+
+
+# --- Final review round: real red-flag shapes (Mexico City 2026), what-if, power cut, evaluate -----------------
+
+def other_msg(lap, text, category="Other"):
+    """A race-control row as OpenF1 really sends most of them: no flag, no scope."""
+    return {"date": iso(T0 + (lap - 1) * LAP + 10), "message": text, "category": category, "flag": None,
+            "scope": None}
+
+
+def mexico_rows():
+    return [
+        {"date": iso(T0), "message": "SESSION STARTED", "category": "SessionStatus"},
+        sc_msg(5, "SAFETY CAR DEPLOYED"),
+        other_msg(7, "RED FLAG - RACE SUSPENDED"),
+        other_msg(7, "SESSION ABORTED", category="SessionStatus"),
+        other_msg(9, "RACE WILL RESUME AT 15:45"),            # advance notice, not the restart
+        other_msg(12, "SESSION STARTED", category="SessionStatus"),
+        other_msg(12, "STANDING START"),
+        sc_msg(20, "SAFETY CAR DEPLOYED"),                     # a second, real safety car after the restart
+        sc_msg(22, "SAFETY CAR IN THIS LAP"),
+    ]
+
+
+def test_mexico_red_flag_shapes_close_the_safety_car_and_end_only_at_session_started():
+    rd = make_rd(n_laps=30, rc_rows=mexico_rows())
+    finish_flags(rd)
+    w = {k: [] for k in ("SC", "RED")}
+    for k, a, b in rd.windows:
+        w[k].append((a, b))
+    assert len(w["RED"]) == 1 and len(w["SC"]) == 2
+    red_a, red_b = w["RED"][0]
+    assert red_a == pytest.approx(T0 + 6 * LAP + 10)                       # "RED FLAG - RACE SUSPENDED"
+    assert red_b == pytest.approx(T0 + 11 * LAP + 10)                      # SessionStatus SESSION STARTED, not lap 9
+    assert w["SC"][0][1] == pytest.approx(red_a)                           # first safety car closed by the red flag
+    assert w["SC"][1][0] == pytest.approx(T0 + 19 * LAP + 10)              # not merged into one long window
+    g = rd.laps[rd.laps.driver_number == 1].set_index("lap_number")
+    assert g.loc[7:11, "neutral"].all()                                    # laps 14-19: racing again
+    assert not g.loc[14:19, "neutral"].any()
+    assert rd.safety_car_laps("SC") == [5, 6, 20, 21, 22]
+    assert rd.safety_car_laps("RED") == [7, 8, 9, 10, 11]
+
+
+def test_race_that_is_never_restarted_stays_red_until_the_end():
+    rd = make_rd(n_laps=30, rc_rows=[
+        {"date": iso(T0), "message": "SESSION STARTED", "category": "SessionStatus"},
+        other_msg(7, "SESSION ABORTED", category="SessionStatus"),
+        other_msg(8, "RACE WILL NOT BE RESUMED")])
+    finish_flags(rd)
+    assert [(k, b) for k, _, b in rd.windows] == [("RED", pytest.approx(T0 + 30 * LAP))]
+
+
+def test_headline_says_there_was_a_red_flag():
+    h = story.headline("Norris", 2.0, [45, 59, 60], 2, red_laps=[45, 46], n_low=0)
+    assert "red flag on lap 45" in h["text"] and story.banned_hits(h["text"]) == []
+    assert "red flag" not in story.headline("Norris", 2.0, [45], 2)["text"]
+
+
+def test_headline_does_not_say_low_confidence_moments_likely_explain_anything():
+    h = story.headline("A", 1.0, [], 6, n_low=4)["text"]
+    assert "2 moments that likely explain big changes in speed, plus 4 less certain ones." in h
+    only_low = story.headline("A", 1.0, [], 3, n_low=3)["text"]
+    assert "likely" not in only_low and "not very sure" in only_low
+    assert "plus one less certain one" in story.headline("A", 1.0, [], 3, n_low=1)["text"]
+    assert story.headline("A", 1.0, [], 2)["text"].endswith("We found 2 moments that likely explain big changes in speed.")
+
+
+def _whatif_rd(compounds, rc_rows=()):
+    rd = make_rd(n_laps=30, rc_rows=rc_rows, stint_rows=[
+        {"driver_number": d, "stint_number": 1, "lap_start": 1, "lap_end": 12, "compound": compounds[0],
+         "tyre_age_at_start": 0} for d in (1, 2)] + [
+        {"driver_number": d, "stint_number": 2, "lap_start": 13, "lap_end": 30, "compound": compounds[1],
+         "tyre_age_at_start": 0} for d in (1, 2)],
+        pit_rows=[{"driver_number": d, "lap_number": 12, "date": iso(T0 + 12 * LAP + 20), "lane_duration": 22.0}
+                  for d in (1, 2)])
+    return finish_flags(rd)
+
+
+def test_whatif_moves_a_normal_stop_but_never_a_rain_tyre_to_slick_stop():
+    dry = whatif.run(_whatif_rd(("MEDIUM", "HARD")))
+    assert set(dry["drivers"]) == {"D1", "D2"}
+    for pair in (("INTERMEDIATE", "SOFT"), ("SOFT", "INTERMEDIATE"), ("WET", "MEDIUM")):
+        res = whatif.run(_whatif_rd(pair))
+        assert res["drivers"] == {} and "rain tyres" in res["unavailable"], pair
+    assert "unavailable" not in dry
+
+
+def test_power_cut_needs_the_spell_to_cover_half_the_shared_clean_laps():
+    from slipstream import powercut
+    from tests.test_accuracy_fixes import fleet_feats
+    # a 15 km/h deficit on the last 10 of 50 laps only: 20 % of the race
+    dev = powercut.lap_deviation(fleet_feats(cut=(3, 42, 15.0), laps=range(2, 52)), None)
+    assert powercut.detect(dev, {3: 4, 4: 3}) == {}
+    # the same deficit over the last 30 of 50 laps is "most of the race"
+    dev = powercut.lap_deviation(fleet_feats(cut=(3, 22, 15.0), laps=range(2, 52)), None)
+    assert set(powercut.detect(dev, {3: 4, 4: 3})) == {3}
+
+
+def test_power_cut_gives_no_verdict_without_intervals():
+    from slipstream import powercut
+    from tests.test_accuracy_fixes import fleet_feats, teams_rd
+    rd = teams_rd()
+    ctx = {"feats": fleet_feats(cut=(3, 10, 15.0)), "straights": []}
+    f = energy.Finding("battery_low", 3, 20, [20], 0, 25.0, "medium", "speed fell", {"value": 30.0})
+    assert powercut.apply(rd, [f], ctx, None) == {} and "power_cut" not in f.detail
+    assert set(powercut.apply(rd, [f], ctx, {})) == {3}            # intervals present (nobody in traffic)
+
+
+def test_evaluate_leaves_unbuilt_races_out_of_the_totals_and_never_calls_them_regressions():
+    from slipstream import evaluate
+    cases = [{"race": "built", "driver": "GAS", "kind": "battery_low", "lap": 6, "verdict": "wrong",
+              "true_cause": "engine_power_cut"},
+             {"race": "gone", "driver": "GAS", "kind": "battery_low", "lap": 6, "verdict": "wrong",
+              "true_cause": "engine_power_cut"},
+             {"race": "gone", "driver": "LEC", "kind": "tyre_wear", "lap": 11, "verdict": "plausible"}]
+    rows = evaluate.evaluate(cases, {"built": []})
+    s = evaluate.summary(rows)
+    assert (s["wrong_total"], s["wrong_fixed"], s["plausible_total"], s["plausible_kept"]) == (1, 1, 0, 0)
+    assert s["missing_races"] == ["gone"]
+    rows_only_missing = evaluate.evaluate(cases[1:], {})
+    lost = [r for r in rows_only_missing if r["verdict"] == "plausible" and r["ok"] is False]
+    assert lost == []                                                 # "no data" (ok None) is not a lost case
+
+
+def test_energy_traffic_step_down_is_not_swallowed_by_the_short_spell_cap():
+    # a strong but short (2 lap) lift spell: capped to medium in clean air, one step lower in traffic
+    from tests.test_energy import feats_for  # noqa: F401  (import check only)
+    rd = make_rd()
+    flagged = {10: 2.5, 11: 2.5}
+    raw = {l: 1.0 for l in range(2, 30)}
+    raw.update({10: 3.5, 11: 3.5})
+    clean = energy._group(rd, "energy_saving", 1, type("S", (), {"idx": 0})(), flagged, {}, raw, 1.0, 1.0, 1.0,
+                          None, traffic={(1, 10): 0.0})
+    busy = energy._group(rd, "energy_saving", 1, type("S", (), {"idx": 0})(), flagged, {}, raw, 1.0, 1.0, 1.0,
+                         None, traffic={(1, 10): 1.0})
+    assert clean[0].confidence == "medium" and busy[0].confidence == "low"
+
+
+def test_chart_measured_drop_and_excess_are_consistent():
+    f = energy.Finding("battery_low", 1, 10, [10], 0, 23.0, "medium",
+                       "accelerator flat out, yet speed fell 45 km/h before the braking point "
+                       "(23 km/h more than usual for him and for the field)", {"value": 45.0})
+    why = build.chart_why(f.why, f, 44.0)               # chart line shows 44, usual drop was 45 - 23 = 22
+    assert "fell 44 km/h" in why and "(22 km/h more than usual" in why
+
+
+def test_missing_race_control_gives_no_whatif_and_says_so():
+    from slipstream import validate
+    wi = build.rc_failed_whatif()
+    validate.validate_whatif(wi)
+    assert wi["drivers"] == {} and "not available" in wi["unavailable"]
+
+
+def test_a_blue_flag_lap_is_never_the_reference_car_for_a_lift():
+    rd = make_rd(n_laps=10, drivers=(1, 2, 3))
+    rd.laps["blue"] = False
+    rd.laps.loc[(rd.laps.driver_number == 2) & (rd.laps.lap_number == 5), "blue"] = True
+    lift = {"lift_s": 2.0}
+    feats = {(d, 5, 0): {"lift": lift if d == 1 else {"lift_s": 0.1}, "clip": None} for d in (1, 2, 3)}
+    traces = {(d, 5): object() for d in (1, 2, 3)}
+    f = energy.Finding("energy_saving", 1, 5, [5], 0, 1.9, "medium", "coasted", {"value": 2.0})
+    f.straight = 0
+    other, _ = build._pick_comparison(rd, {"feats": feats, "traces": traces}, f)
+    assert other == 3 and other != 2

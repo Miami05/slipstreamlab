@@ -138,6 +138,8 @@ def validate_whatif(obj) -> None:
     if not p.req(isinstance(obj, dict), "whatif must be an object"):
         raise ValidationError("whatif.json", p)
     p.req(_num(obj.get("pit_loss_s")), "pit_loss_s must be a finite number")
+    p.req(obj.get("unavailable") is None or isinstance(obj.get("unavailable"), str),
+          "unavailable must be a string when present")
     drivers = obj.get("drivers")
     if p.req(isinstance(drivers, dict), "drivers must be an object"):
         for code, d in drivers.items():

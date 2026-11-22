@@ -143,6 +143,8 @@ by the session's `gmt_offset`), so a Saturday-night race in Las Vegas is
   }
 }
 ```
+- Optional `unavailable` (string): present with `drivers: {}` when no what-if could be made (race
+  control missing); the page shows it instead of the generic empty message.
 - Only drivers who made at least one stop under green flag appear. The
   what-if moves their **first green-flag stop**: the first stop after lap 2 and
   before the last lap whose in-lap and out-lap are not under a safety car, VSC
