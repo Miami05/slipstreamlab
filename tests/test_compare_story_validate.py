@@ -92,7 +92,7 @@ def good_race():
         "results": [{"code": "AAA", "position": 1}], "safety_car_laps": [3, 4],
         "headline": {"title": "Aaa won.", "text": "Some text."},
         "moments": [{"id": "m1", "driver": "AAA", "lap": 3, "lap_label": "Lap 3", "kind": "battery_low",
-                     "label": "Battery ran low", "confidence": "high", "why": "because.",
+                     "label": "Lost power (maybe battery)", "confidence": "high", "why": "because.",
                      "chart": {"type": "speed", "title": "t", "x_label": "x", "y_label": "y",
                                "zone": [0.5, 0.8], "zone_label": "z", "series": series},
                      "caption": "c"}]}

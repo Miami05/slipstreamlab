@@ -2,7 +2,8 @@
 
 Assumptions (also in docs/METHODS.md)
 -------------------------------------
-* Only the driver's FIRST stop under green flags is moved; everything else
+* Only the driver's FIRST stop under green flags (after lap 2; not under a safety
+  car, VSC or red flag and not on a restart lap) is moved; everything else
   (second stops, compounds, other drivers) stays as it really happened.
 * Time gain comes only from tyre age: laps on fresher rubber are faster by the
   measured degradation slope (seconds per lap of age, fuel-corrected, per
@@ -13,6 +14,11 @@ Assumptions (also in docs/METHODS.md)
   (cumulative lap times of everybody, real data). Cars that have not stopped
   yet are still counted ahead/behind where they really were: this is exactly
   the "who would I rejoin behind" question, but it is not a race simulation.
+* A gain is never larger than the tyres could plausibly deliver: moving a stop
+  by k laps swaps k laps of worn rubber for k laps of fresh rubber, so the gain
+  cannot exceed k x the largest tyre penalty measured in this race. A straight
+  line extrapolated over many laps can; then the shown gain is held at that
+  bound and the range is widened until it reaches the model's own number.
 * The range comes from lap-to-lap noise, slope uncertainty and a flat
   allowance when the new tyre compound is not the old one; never narrower
   than +-1.5 s. Laps under safety car get a much wider upper bound because a
@@ -21,6 +27,7 @@ Assumptions (also in docs/METHODS.md)
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from . import model, tyres
 
@@ -92,9 +99,18 @@ def option_gain(rd, fits, comp, driver, info, P) -> tuple[float, float, int]:
     return float(gain), float(np.sqrt(var)), n
 
 
-def value_range(gain: float, sd: float, under_safety_car: bool, pit_loss: float) -> tuple[float, float]:
-    """Honest low/high around the gain: ~90 % band, never narrower than +-1.5 s."""
-    half = max(MIN_HALF_WIDTH, 1.645 * sd)
+def plausible_gain(L: int, P: int, fits) -> float:
+    """Largest |gain| (s) that tyre wear measured in this race can plausibly produce for a stop moved from L to P."""
+    return abs(L - P) * tyres.max_measured_penalty(fits)
+
+
+def value_range(gain: float, sd: float, under_safety_car: bool, pit_loss: float,
+                reach: float = 0.0) -> tuple[float, float]:
+    """Honest low/high around the gain: ~90 % band, never narrower than +-1.5 s.
+
+    reach: extra half-width so the range also covers a model value that was held back (see run()).
+    """
+    half = max(MIN_HALF_WIDTH, 1.645 * sd, reach)
     low, high = gain - half, gain + half
     if under_safety_car:
         high += 0.4 * pit_loss      # a stop under safety car is much cheaper than the fixed loss we assume
@@ -119,22 +135,28 @@ def run(rd: model.RaceData, df=None, fits=None) -> dict:
             continue
         S = min(gstops, key=lambda s: s.in_lap)
         stints = rd.stints[rd.stints.driver_number == dn].sort_values("stint_number").to_dict("records")
-        k = next((i for i, st in enumerate(stints) if int(st["lap_end"]) == S.in_lap), None)
+        k = next((i for i, st in enumerate(stints) if model.as_int(st["lap_end"], -1) == S.in_lap), None)
         if k is None or k + 1 >= len(stints):
             continue
         before, after = stints[k], stints[k + 1]
-        info = ((str(before["compound"]), int(before["lap_start"]), int(before.get("tyre_age_at_start") or 0)),
-                (str(after["compound"]), int(after.get("tyre_age_at_start") or 0), S.in_lap),
-                int(after["lap_end"]))
-        L, s1, e2 = S.in_lap, int(before["lap_start"]), int(after["lap_end"])
+        info = ((str(before["compound"]), model.as_int(before["lap_start"]), model.as_int(before.get("tyre_age_at_start"))),
+                (str(after["compound"]), model.as_int(after.get("tyre_age_at_start")), S.in_lap),
+                model.as_int(after["lap_end"]))
+        L, s1, e2 = S.in_lap, model.as_int(before["lap_start"]), model.as_int(after["lap_end"])
+        typical = _typical_lap(rd, dn, L)
         options = []
         for P in range(L - SPAN, L + SPAN + 1):
             if P < 2 or P >= N or P < s1 or P >= e2:
                 continue
-            gain, sd, n = option_gain(rd, fits, comp, dn, info, P)
-            low, high = value_range(gain, sd, P in sc_laps, pit_loss)
-            nearby, traffic = _nearby(rd, cum, dn, P, L, gain_upto=_gain_upto(rd, fits, comp, dn, info, P),
-                                      pit_loss=pit_loss, N=N)
+            raw, sd, n = option_gain(rd, fits, comp, dn, info, P)
+            cap = plausible_gain(L, P, fits)
+            gain = float(np.clip(raw, -cap, cap))
+            low, high = value_range(gain, sd, P in sc_laps, pit_loss, reach=abs(raw - gain))
+            upto = _gain_upto(rd, fits, comp, dn, info, P)
+            if raw != gain and raw != 0:             # same (held back) gain for the position and the nearby cars
+                upto = {l: v * gain / raw for l, v in upto.items()}
+            nearby, traffic = _nearby(rd, cum, dn, P, L, gain_upto=upto, pit_loss=pit_loss, N=N,
+                                      typical_lap_s=typical)
             fin = _finish(rd, results, final, dn, gain)
             options.append({"pit_lap": int(P), "finish_estimate": int(fin), "gain_s": round(gain, 2),
                             "low_s": round(low, 2), "high_s": round(high, 2),
@@ -164,12 +186,33 @@ def _gain_upto(rd, fits, comp, dn, info, P):
     return out
 
 
-def _nearby(rd, cum, dn, P, L, gain_upto, pit_loss, N):
-    """Two nearest cars (signed gap, negative = ahead) after the stop, and traffic flag."""
+def _typical_lap(rd, dn: int, L: int) -> float | None:
+    """Median clean lap time of the driver just before lap L (fallback: over the whole race)."""
+    def clean(laps):
+        out = []
+        for l in laps:
+            r = rd.lap_row(dn, l)
+            if r is not None and model.usable_lap(r) and np.isfinite(r.dur):
+                out.append(float(r.dur))
+        return out
+    near = clean(range(L - 6, L)) or clean(range(2, rd.total_laps + 1))
+    return float(np.median(near)) if near else None
+
+
+def _nearby(rd, cum, dn, P, L, gain_upto, pit_loss, N, typical_lap_s=None):
+    """Two nearest cars (signed gap, negative = ahead) after the stop, and traffic flag.
+
+    traffic = some car is less than TRAFFIC_GAP_S ahead at the end of the out-lap. Nothing
+    else is claimed: the other car's pace is not compared and no time is deducted for it.
+    """
     Q = min(P + 1, N)
     mine = cum.get(dn, {}).get(Q)
     if mine is None:
         return [], False
+    if Q == L and typical_lap_s is not None and (Q - 1) in cum[dn]:
+        # P = L-1: lap Q is the real IN-lap, whose time already contains part of the real stop.
+        # Start from a normal lap instead, or the pit loss would be counted twice.
+        mine = cum[dn][Q - 1] + typical_lap_s
     upto = [l for l in gain_upto if l <= Q]
     g = gain_upto[max(upto)] if upto else 0.0      # cumulative gain through lap Q (not the maximum)
     shift = pit_loss if L >= Q else 0.0
@@ -189,11 +232,12 @@ def _final_times(rd, cum):
     """Final classified time per driver (laps, seconds). Uses the official duration when available."""
     res = {}
     for r in rd.result.itertuples():
-        if getattr(r, "dns", False):
+        if model.truthy(getattr(r, "dns", False)) or pd.isna(r.number_of_laps):
             continue
         dn = int(r.driver_number)
         laps = int(r.number_of_laps)
-        t = float(r.duration) if r.duration is not None and np.isfinite(r.duration) else None
+        dur = pd.to_numeric(r.duration, errors="coerce") if r.duration is not None else float("nan")
+        t = float(dur) if pd.notna(dur) and np.isfinite(dur) else None
         if t is None:
             t = cum.get(dn, {}).get(laps)
         res[dn] = (laps, t)

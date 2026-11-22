@@ -14,6 +14,8 @@ N_SEGMENTS = 20
 MAX_POINTS = 400
 TIE_S = 0.02
 MAX_REPEATED_POSITION = 0.3   # share of identical consecutive samples we tolerate
+LAP_MARGIN_S = 0.5            # samples fetched before the lap start / after the lap end, for interpolation
+MAX_EXTRAPOLATE_S = 0.6       # a path that misses the line by more than this is refused
 
 
 def fetch_lap_path(rd: model.RaceData, dn: int, lap: int):
@@ -22,7 +24,8 @@ def fetch_lap_path(rd: model.RaceData, dn: int, lap: int):
     if r is None or not (np.isfinite(r.t0) and np.isfinite(r.t1)):
         return None
     rows = openf1.get("location", {"session_key": rd.key, "driver_number": int(dn),
-                                   "date>": openf1.iso_utc(r.t0), "date<": openf1.iso_utc(r.t1 + 0.3)})
+                                   "date>": openf1.iso_utc(r.t0 - LAP_MARGIN_S),
+                                   "date<": openf1.iso_utc(r.t1 + LAP_MARGIN_S)})
     if len(rows) < 60:
         return None
     t = np.array([model.to_epoch(x["date"]) for x in rows]) - r.t0
@@ -39,6 +42,32 @@ def fetch_lap_path(rd: model.RaceData, dn: int, lap: int):
     if ((np.diff(x) == 0) & (np.diff(y) == 0)).mean() > MAX_REPEATED_POSITION:
         return None
     return t, x, y
+
+
+def trim_path(path, lap_time: float):
+    """Cut a (t, x, y) path to exactly [0, lap_time] seconds after the lap start.
+
+    Samples outside are dropped; the position at t=0 and at t=lap_time is interpolated
+    (a few tenths of a second of missing coverage at either end are extrapolated from the
+    two nearest samples). Raises ValueError if the path misses the line by more than
+    MAX_EXTRAPOLATE_S: better no comparison than a misleading one.
+    """
+    t, x, y = (np.asarray(a, float) for a in path)
+    if len(t) < 2 or not np.isfinite(lap_time) or lap_time <= 0:
+        raise ValueError("path too short")
+    if t[0] > MAX_EXTRAPOLATE_S or lap_time - t[-1] > MAX_EXTRAPOLATE_S:
+        raise ValueError("path does not cover the lap")
+    if t[0] > 0:        # extend backwards to t=0 along the first segment
+        k = (t[0] - 0.0) / max(t[1] - t[0], 1e-9)
+        t, x, y = (np.concatenate([[0.0], t]), np.concatenate([[x[0] - (x[1] - x[0]) * k], x]),
+                   np.concatenate([[y[0] - (y[1] - y[0]) * k], y]))
+    if t[-1] < lap_time:
+        k = (lap_time - t[-1]) / max(t[-1] - t[-2], 1e-9)
+        t, x, y = (np.concatenate([t, [lap_time]]), np.concatenate([x, [x[-1] + (x[-1] - x[-2]) * k]]),
+                   np.concatenate([y, [y[-1] + (y[-1] - y[-2]) * k]]))
+    inner = (t > 0.0) & (t < lap_time)
+    tt = np.concatenate([[0.0], t[inner], [lap_time]])
+    return tt, np.interp(tt, t, x), np.interp(tt, t, y)
 
 
 def _downsample(n: int, k: int) -> np.ndarray:
@@ -71,8 +100,8 @@ def analyse(a_path, b_path, lap_time_a, lap_time_b, a_name, b_name, a_code, b_co
 
     a_path / b_path: (t, x, y) raw arrays. Returns the pair dict (contract format).
     """
-    ta, xa, ya = a_path
-    tb, xb, yb = b_path
+    ta, xa, ya = trim_path(a_path, lap_time_a)
+    tb, xb, yb = trim_path(b_path, lap_time_b)
     f = scale_paths([(xa, ya), (xb, yb)])
     sxa, sya = f(xa, ya)
     sxb, syb = f(xb, yb)
@@ -154,8 +183,11 @@ def build_pair(rd: model.RaceData, a_dn: int, b_dn: int, lap: int) -> dict | Non
     ra, rb = rd.lap_row(a_dn, lap), rd.lap_row(b_dn, lap)
     la = float(ra.dur) if np.isfinite(ra.dur) else float(ra.t1 - ra.t0)
     lb = float(rb.dur) if np.isfinite(rb.dur) else float(rb.t1 - rb.t0)
-    pair = analyse(pa, pb, la, lb, rd.drivers.loc[a_dn, "last_name"], rd.drivers.loc[b_dn, "last_name"],
-                   rd.code(a_dn), rd.code(b_dn))
+    try:
+        pair = analyse(pa, pb, la, lb, rd.drivers.loc[a_dn, "last_name"], rd.drivers.loc[b_dn, "last_name"],
+                       rd.code(a_dn), rd.code(b_dn))
+    except ValueError:
+        return None
     pair["lap"] = int(lap)
     return pair
 

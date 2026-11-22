@@ -7,11 +7,19 @@ from __future__ import annotations
 
 import re
 
+# Causes are inferred, never measured: every label is hedged (docs/LEGAL.md). We can see that a
+# car lost power on a straight; the battery is only one possible reason (an engine-temperature
+# limit, for example, looks the same), so the battery label says "maybe".
 KIND_LABEL = {
-    "battery_low": "Battery ran low",
-    "energy_saving": "Saved energy to attack later",
-    "tyre_wear": "Tyres wore out",
+    "battery_low": "Lost power (maybe battery)",
+    "energy_saving": "Probably saving energy",
+    "tyre_wear": "Tyres probably wore out",
 }
+HEDGE_RE = re.compile(r"\b(probably|likely|maybe|possibly|may be|might)\b", re.I)
+
+
+def is_hedged(text: str) -> bool:
+    return bool(HEDGE_RE.search(text or ""))
 
 # Words/patterns that must never appear in user-facing text.
 BANNED_PATTERNS = [
@@ -36,6 +44,25 @@ def fmt_seconds(x: float) -> str:
     return f"{x:.1f}" if x < 10 else f"{x:.0f}"
 
 
+def lap_runs(laps) -> list[tuple[int, int]]:
+    """[19, 20, 21, 40] -> [(19, 21), (40, 40)]: consecutive laps grouped into spells."""
+    runs: list[list[int]] = []
+    for lap in sorted(set(int(x) for x in laps)):
+        if runs and lap == runs[-1][1] + 1:
+            runs[-1][1] = lap
+        else:
+            runs.append([lap, lap])
+    return [(a, b) for a, b in runs]
+
+
+def _when(a: int, b: int) -> str:
+    return f"lap {a}" if a == b else f"laps {a} and {b}" if b == a + 1 else f"laps {a} to {b}"
+
+
+def _when_all(runs: list[tuple[int, int]]) -> str:
+    return " and again on ".join(_when(a, b) for a, b in runs)
+
+
 def headline(winner: str, gap_s: float | None, sc_laps: list[int], n_moments: int,
              vsc_laps: list[int] | None = None) -> dict:
     if gap_s is None or gap_s <= 0:
@@ -44,34 +71,45 @@ def headline(winner: str, gap_s: float | None, sc_laps: list[int], n_moments: in
         unit = "second" if round(gap_s, 1) == 1.0 else "seconds"
         title = f"{winner} won by {fmt_seconds(gap_s)} {unit}."
     parts = []
-    if sc_laps:
-        a, b = min(sc_laps), max(sc_laps)
-        parts.append(f"A safety car came out on lap {a} and stayed until lap {b}, which bunched the field up.")
-    elif vsc_laps:
-        a, b = min(vsc_laps), max(vsc_laps)
-        when = f"lap {a}" if a == b else f"laps {a} and {b}" if b == a + 1 else f"laps {a} to {b}"
-        parts.append(f"The whole field was slowed down for a short time on {when}.")
+    runs = lap_runs(sc_laps or [])
+    if len(runs) == 1:
+        a, b = runs[0]
+        if a == b:
+            parts.append(f"A safety car came out on lap {a}, which bunched the field up.")
+        else:
+            parts.append(f"A safety car came out on lap {a} and stayed until lap {b}, which bunched the field up.")
+    elif runs:
+        parts.append(f"A safety car came out more than once, on {_when_all(runs)}, which bunched the field up.")
+    vruns = lap_runs(vsc_laps or [])
+    if vruns:
+        lead = "The whole field was slowed down for a short time" if not runs else \
+            "The whole field was also slowed down for a short time"
+        parts.append(f"{lead} on {_when_all(vruns)}.")
     if n_moments == 0:
         parts.append("Nothing in the data stood out clearly enough to explain here.")
     elif n_moments == 1:
         parts.append("We found one moment that likely explains a big change in speed.")
     else:
         parts.append(f"We found {n_moments} moments that likely explain big changes in speed.")
-    return {"title": title, "text": " ".join(parts[:2])}
+    return {"title": title, "text": " ".join(parts[:3])}
 
 
 def speed_moment(kind: str, last: str, lap: int, value: float, score: float, other: str | None,
-                 other_value: float | None) -> dict:
+                 other_value: float | None, persistent: bool = False) -> dict:
     if kind == "battery_low":
         cmp_txt = ""
         if other and other_value is not None:
-            cmp_txt = f" {other} lost {other_value:.0f} km/h on the same stretch."
+            cmp_txt = (f" {other} lost {other_value:.0f} km/h on the same stretch." if other_value >= 1
+                       else f" {other} did not slow down on the same stretch.")
+        reason = "The battery is one likely reason."
+        if persistent:
+            reason += " This happened on most of his laps, which can also mean a problem with the car."
         return {
             "chart_title": f"Where {last} slowed down · lap {lap}",
             "zone_label": f"{last} slows here",
-            "caption": (f"{last} kept the accelerator flat out, but the car still slowed by about "
-                        f"{value:.0f} km/h before braking.{cmp_txt} The battery probably ran low."),
-            "social_title": f"{last} slowed down. A low battery is the likely reason.",
+            "caption": (f"{last} kept the accelerator flat out, but the car lost power on the straight and slowed by "
+                        f"about {value:.0f} km/h before braking.{cmp_txt} {reason}"),
+            "social_title": f"{last} lost power. A low battery is one likely reason.",
             "social_sentence": f"Flat out, yet {value:.0f} km/h slower before braking.",
             "big": f"-{value:.0f} km/h",
         }
@@ -89,10 +127,10 @@ def speed_moment(kind: str, last: str, lap: int, value: float, score: float, oth
 def wear_moment(last: str, start_lap: int, rise: float, first_lap: int, last_lap: int) -> dict:
     return {
         "chart_title": f"{last}'s lap times · laps {first_lap} to {last_lap}",
-        "zone_label": "Tyres worn from here",
+        "zone_label": "Tyres probably worn from here",
         "caption": (f"{last}'s lap times, adjusted for the fuel burning off, climbed by about "
                     f"{rise:.1f} seconds from lap {start_lap}. The tyres had probably worn out."),
-        "social_title": f"{last}'s tyres wore out. Lap times fell off from lap {start_lap}.",
+        "social_title": f"{last}'s tyres probably wore out. Lap times fell off from lap {start_lap}.",
         "social_sentence": f"About {rise:.1f} seconds slower per lap, and it stayed that way.",
         "big": f"+{rise:.1f} s",
     }

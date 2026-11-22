@@ -32,7 +32,7 @@ function render(data, ctx) {
   const codes = Object.keys(pit)
     .filter((c) => drivers.has(c) && pit[c] && Array.isArray(pit[c].options) && pit[c].options.length)
     .sort((a, b) => (pit[a].real_finish || 99) - (pit[b].real_finish || 99));
-  if (!codes.length) throw new EmptyError('No driver made a normal pit stop in this race, so there is nothing to try.');
+  if (!codes.length) throw new EmptyError('No driver made a normal pit stop under green flags in this race (stops under a safety car are not moved), so there is nothing to try.');
 
   const trackPoints = compare && Array.isArray(compare.pairs) && compare.pairs[0] && validTrack(compare.pairs[0].track)
     ? compare.pairs[0].track : ovalTrack();
@@ -64,7 +64,8 @@ function render(data, ctx) {
   ctx.content.appendChild(el('section', { class: 'card', style: 'gap:16px' },
     sliderLabel, slider,
     el('div', { class: 'slider-ends' }, el('span', { text: '← earlier' }), endMid, el('span', { text: 'later →' })),
-    el('div', { class: 'result', 'aria-live': 'polite', 'aria-atomic': 'true' }, finishEl, trafficEl, rangeEl)));
+    el('div', { class: 'result', 'aria-live': 'polite', 'aria-atomic': 'true' }, finishEl, trafficEl, rangeEl),
+    el('p', { class: 'hint', text: 'We move his first pit stop made under green flags. His other stops stay as they really were.' })));
 
   // Map card
   const mapTitle = el('h2');

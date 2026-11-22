@@ -10,8 +10,8 @@ def race_and_moment():
     race = {"name": "Test Grand Prix",
             "drivers": [{"code": "AAA", "last_name": "Leclerc", "color": "#E8002D"},
                         {"code": "BBB", "last_name": "Hamilton", "color": "#E8002D"}]}
-    m = {"id": "m1", "driver": "AAA", "lap": 34, "lap_label": "Lap 34", "label": "Battery ran low",
-         "caption": "Leclerc slowed. The battery probably ran low.",
+    m = {"id": "m1", "driver": "AAA", "lap": 34, "lap_label": "Lap 34", "label": "Lost power (maybe battery)",
+         "caption": "Leclerc lost power on the straight. The battery is one likely reason.",
          "chart": {"type": "speed", "title": "Where Leclerc slowed down · lap 34", "x_label": "Along the straight →",
                    "y_label": "Speed (km/h)", "zone": [0.6, 1.0], "zone_label": "Leclerc slows here",
                    "series": [{"driver": "AAA", "points": pts}, {"driver": "BBB", "points": pts2}]}}
@@ -21,7 +21,7 @@ def race_and_moment():
 def test_png_size_and_safe_zone(tmp_path):
     race, m = race_and_moment()
     path = tmp_path / "m.png"
-    social.render_png(race, m, {"m1": {"social_title": "Leclerc slowed down. A low battery is the likely reason.",
+    social.render_png(race, m, {"m1": {"social_title": "Leclerc lost power. A low battery is one likely reason.",
                                          "social_sentence": "Flat out, yet 28 km/h slower before braking.",
                                          "big": "-28 km/h"}}, path)
     im = np.array(Image.open(path).convert("RGB"))

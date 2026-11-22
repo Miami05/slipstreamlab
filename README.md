@@ -11,7 +11,7 @@ three simple questions:
 
 | Page | Question it answers |
 |---|---|
-| **What happened** | Why did that driver slow down? Battery ran low, saving energy on purpose, or worn-out tyres? |
+| **What happened** | Why did that driver slow down? Lost power (maybe the battery), probably saving energy on purpose, or worn-out tyres? |
 | **What if?** | What if a driver had stopped for new tyres a few laps earlier or later? |
 | **Compare two drivers** | Where on the track was each driver faster? (replay on a track map) |
 
@@ -31,6 +31,7 @@ python3 -m venv .venv
 # 1. Build the data for a race (downloads from OpenF1, cached in .cache/)
 .venv/bin/python -m slipstream build --year 2026 --round 21
 #    or: --latest  (most recent finished race)
+#    add --refresh to ignore the local cache and download that race again
 
 # 2. Look at the website
 python3 -m http.server -d web 8000

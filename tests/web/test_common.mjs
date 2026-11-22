@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import {
   hexToRgb, contrastRatio, lightenForText, ordinal, secondsPhrase, rangeText, trafficText,
   finishText, finishKind, pitLabel, gapLabel, formatLapTime, formatDate, safeFileName, interpolatePath,
-  cumulativeDistances, distanceAt, timeAtDistance, gapSeconds, aheadText, fitPoints, makeOutline,
+  cumulativeDistances, distanceAt, timeAtDistance, gapSeconds, makeGapReader, aheadText, fitPoints, makeOutline,
   chooseRace, pageUrl, dataRoot, kindInfo, confidenceLevel, ovalTrack, validTrack, colorsClose,
 } from '../../web/assets/common.js';
 import { placeCars, SECONDS_TO_FRACTION } from '../../web/assets/whatif.js';
-import { isOvertake } from '../../web/assets/compare.js';
+import { GHOST_NOTE } from '../../web/assets/compare.js';
+import fs from 'node:fs';
 
 let n = 0;
 function test(name, fn) { fn(); n++; console.log('ok -', name); }
@@ -59,9 +60,9 @@ test('secondsPhrase and rangeText', () => {
 });
 
 test('finish sentences', () => {
-  assert.equal(finishText(5, 4), 'He would finish 4th instead of 5th');
-  assert.equal(finishText(5, 6), 'He would finish 6th instead of 5th');
-  assert.equal(finishText(5, 5), 'He would still finish 5th');
+  assert.equal(finishText(5, 4), 'He would probably finish 4th instead of 5th');
+  assert.equal(finishText(5, 6), 'He would probably finish 6th instead of 5th');
+  assert.equal(finishText(5, 5), 'He would probably still finish 5th');
   assert.equal(finishKind(5, 4), 'better');
   assert.equal(finishKind(5, 6), 'worse');
   assert.equal(finishKind(5, 5), 'same');
@@ -76,8 +77,9 @@ test('pit label wording', () => {
 });
 
 test('traffic, gap and time formatting', () => {
-  assert.equal(trafficText(true), 'He comes out behind a slower car and gets stuck.');
-  assert.equal(trafficText(false), 'No car right in front of him to slow him down.');
+  assert.equal(trafficText(true), 'He’d come out right behind another car, which could cost him time.');
+  assert.equal(trafficText(false), 'No car within 1.5 seconds in front of him when he comes out.');
+  assert.ok(!/slower|stuck/.test(trafficText(true)));
   assert.equal(gapLabel(-1.4), '1.4s ahead');
   assert.equal(gapLabel(2), '2.0s behind');
   assert.equal(gapLabel(0.01), 'alongside');
@@ -91,7 +93,12 @@ test('traffic, gap and time formatting', () => {
 test('moment kinds and confidence', () => {
   assert.equal(kindInfo('battery_low').bg, '#2E2547');
   assert.equal(kindInfo('energy_saving').fg, '#9CC8FF');
-  assert.equal(kindInfo('tyre_wear').label, 'Tyres wore out');
+  assert.equal(kindInfo('tyre_wear').label, 'Tyres probably wore out');
+  assert.equal(kindInfo('battery_low').label, 'Lost power (maybe battery)');
+  assert.equal(kindInfo('energy_saving').label, 'Probably saving energy');
+  for (const k of ['battery_low', 'energy_saving', 'tyre_wear']) {
+    assert.match(kindInfo(k).label, /probably|maybe/i); // inferred causes are always hedged
+  }
   assert.equal(kindInfo('weird', 'Something').label, 'Something');
   assert.deepEqual(['high', 'medium', 'low', undefined].map(confidenceLevel), [3, 2, 1, 1]);
 });
@@ -148,18 +155,82 @@ test('aheadText', () => {
   assert.equal(aheadText('Norris', 'Leclerc', { leader: null, gap: 0 }), 'Norris and Leclerc are side by side');
 });
 
-test('isOvertake detects a lead change around the key moment', () => {
-  const mk = (rows) => ({ path: rows, cum: cumulativeDistances(rows) });
-  // B starts ahead, A overtakes mid-lap
-  const a = mk([[0, 0, 0], [50, 40, 0], [100, 100, 0]]);
-  const b = mk([[0, 0, 0], [50, 60, 0], [100, 100, 0]]);
-  const c = mk([[0, 0, 0], [50, 70, 0], [100, 120, 0]]);
-  assert.equal(isOvertake(a, c, 100, 0.5), false);
-  // build a real crossing
-  const d = mk([[0, 0, 0], [40, 30, 0], [60, 60, 0], [100, 100, 0]]);
-  const e = mk([[0, 0, 0], [40, 40, 0], [60, 50, 0], [100, 90, 0]]);
-  assert.equal(isOvertake(d, e, 100, 0.5), true);
-  assert.equal(isOvertake(a, b, 100, null), false);
+test('there is no Overtake label any more and the page explains the ghost comparison', () => {
+  assert.equal(GHOST_NOTE, 'Both laps start together, like a ghost car — this isn\'t their real gap on track.');
+  const src = fs.readFileSync(new URL('../../web/assets/compare.js', import.meta.url), 'utf8');
+  assert.ok(!/Overtake/.test(src));
+  assert.match(src, /'Key moment'/);
+});
+
+// A path that does NOT start exactly on the line and runs past its lap time (like old data):
+// the final readout must still be lap_time_b - lap_time_a.
+const ghost = (lapA, lapB, offA = 0.2, offB = 0.03, over = 0.3) => {
+  const mk = (lap, off) => {
+    const rows = [];
+    for (let t = off; t <= lap + over; t += 0.27) rows.push([Number(t.toFixed(2)), Math.cos(t / lap * 6.2832), Math.sin(t / lap * 6.2832)]);
+    return { path: rows, cum: cumulativeDistances(rows), lap };
+  };
+  return [mk(lapA, offA), mk(lapB, offB)];
+};
+
+test('gapSeconds: the final readout is exactly the lap time difference', () => {
+  const [a, b] = ghost(96.45, 96.182);
+  const end = gapSeconds(a, b, 500);
+  assert.equal(end.final, true);
+  assert.equal(end.leader, 'b'); // the faster lap wins even though a has a trailing sample past the line
+  near(end.gap, 96.45 - 96.182, 1e-9);
+  const [c, d] = ghost(97.08, 97.159, 0.11, 0.23);
+  const e2 = gapSeconds(c, d, 500);
+  assert.equal(e2.leader, 'a');
+  near(e2.gap, 0.079, 1e-9);
+  assert.equal(aheadText('Russell', 'Antonelli', e2), 'Russell is 0.08 seconds ahead'); // not "side by side"
+  assert.notEqual(aheadText('A', 'B', gapSeconds(...ghost(96.45, 96.182), 500)), 'A and B are side by side');
+});
+
+test('gapSeconds is anchored at t=0 and does not depend on where the first sample falls', () => {
+  const [a, b] = ghost(90, 90, 0.2, 0.03);
+  assert.equal(gapSeconds(a, b, 0).leader, null);
+  assert.ok(gapSeconds(a, b, 45).gap < 0.2); // same pace: only the sampling offset (<0.2 s) remains
+});
+
+test('makeGapReader: hysteresis keeps the leader from flipping on noise; depends only on the playhead', () => {
+  // two cars of identical pace with a tiny wobble in B's speed (+-0.04 s)
+  const mk = (wobble) => {
+    const rows = [];
+    for (let i = 0; i <= 200; i++) { const t = i * 0.5; rows.push([t, t + wobble * Math.sin(i), 0]); }
+    return { path: rows, cum: cumulativeDistances(rows), lap: 100 };
+  };
+  const a = mk(0);
+  const b = mk(0.04);
+  const reader = makeGapReader(a, b);
+  const seen = new Set();
+  for (let t = 0; t < 100; t += 0.1) seen.add(reader(t).leader);
+  assert.deepEqual([...seen], [null]); // never calls a leader inside the dead band
+  // scrubbing order does not matter
+  const x1 = reader(42.3);
+  reader(5); reader(99);
+  assert.deepEqual(reader(42.3), x1);
+  // a real, growing lead is reported, and does not flip back on a small wobble
+  const fast = mk(0);
+  const slow = { path: fast.path.map(([t, x, y]) => [t * 1.01, x, y]), lap: 101 };
+  slow.cum = cumulativeDistances(slow.path);
+  const r2 = makeGapReader(fast, slow);
+  assert.equal(r2(60).leader, 'a');
+  assert.equal(r2(1000).leader, 'a');
+  near(r2(1000).gap, 1, 1e-9);
+  // swapping the cars swaps the leader
+  assert.equal(makeGapReader(slow, fast)(60).leader, 'b');
+});
+
+test('real/sample compare data: final readout equals the printed lap times', () => {
+  const file = new URL('../../web/sample-data/2026-00-demo-grand-prix/compare.json', import.meta.url);
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const p of data.pairs) {
+    const a = { path: p.a_path, cum: cumulativeDistances(p.a_path), lap: p.lap_time_a };
+    const b = { path: p.b_path, cum: cumulativeDistances(p.b_path), lap: p.lap_time_b };
+    const fin = makeGapReader(a, b)(1e6);
+    near(fin.leader === 'a' ? fin.gap : -fin.gap, p.lap_time_b - p.lap_time_a, 1e-9);
+  }
 });
 
 test('fitPoints keeps aspect ratio inside the padded box', () => {

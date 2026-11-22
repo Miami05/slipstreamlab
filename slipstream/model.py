@@ -34,6 +34,60 @@ def to_epoch(value) -> float:
     return ts.timestamp()
 
 
+def as_int(value, default: int = 0) -> int:
+    """int(value), but None / NaN / garbage give `default` (a pandas NaN is truthy, so `x or 0` is not enough)."""
+    try:
+        if value is None or pd.isna(value):
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def truthy(value) -> bool:
+    """bool(value) with None / NaN counting as False."""
+    try:
+        if value is None or pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(value)
+
+
+def epoch_seconds(dates) -> np.ndarray:
+    """ISO timestamps (strings or datetimes) -> epoch seconds, whatever the datetime resolution.
+
+    `.astype("int64")` of a datetime column returns nanoseconds under pandas 2 but
+    microseconds/milliseconds when pandas infers a coarser unit (always so in pandas 3),
+    which made every telemetry timestamp 1000x too small. Subtracting the epoch and
+    asking for total_seconds() does not depend on the unit.
+    """
+    ts = pd.to_datetime(pd.Series(dates), format="ISO8601", utc=True)
+    return (ts - pd.Timestamp("1970-01-01", tz="UTC")).dt.total_seconds().to_numpy(float)
+
+
+def parse_gmt_offset(value) -> float:
+    """OpenF1 gmt_offset ('-08:00:00', '02:00:00', '+05:30:00') -> seconds (0 if missing/odd)."""
+    m = re.fullmatch(r"\s*([+-]?)(\d{1,2}):(\d{2})(?::(\d{2}))?\s*", str(value or ""))
+    if not m:
+        return 0.0
+    secs = int(m.group(2)) * 3600 + int(m.group(3)) * 60 + int(m.group(4) or 0)
+    return -float(secs) if m.group(1) == "-" else float(secs)
+
+
+def local_date(session: dict) -> str:
+    """Calendar date of the session start in the circuit's local time (YYYY-MM-DD).
+
+    date_start is UTC: a night race in the Americas starts on the next UTC day.
+    """
+    import datetime as _dt
+    start = _dt.datetime.fromisoformat(str(session["date_start"]).replace("Z", "+00:00"))
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=_dt.timezone.utc)
+    local = start + _dt.timedelta(seconds=parse_gmt_offset(session.get("gmt_offset")))
+    return local.date().isoformat()
+
+
 def kebab(text: str) -> str:
     """'São Paulo' -> 'sao-paulo' (ASCII, lower case, dashes)."""
     t = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
@@ -164,12 +218,19 @@ class RaceData:
         if df.empty:
             self._tele[dn] = {}
             return {}
-        t = pd.to_datetime(df["date"], format="ISO8601", utc=True).astype("int64").to_numpy() / 1e9
+        t = epoch_seconds(df["date"])
+        speed = pd.to_numeric(df["speed"], errors="coerce").to_numpy(float)
+        thr = pd.to_numeric(df["throttle"], errors="coerce").to_numpy(float)
+        brk = pd.to_numeric(df["brake"], errors="coerce").to_numpy(float)
+        # a sample with a missing channel is dropped (the lap check then rejects laps with a real hole)
+        good = np.isfinite(t) & np.isfinite(speed) & np.isfinite(thr) & np.isfinite(brk)
+        t, speed, thr, brk = t[good], speed[good], thr[good], brk[good]
         order = np.argsort(t)
-        t = t[order]
-        speed = df["speed"].to_numpy(float)[order]
-        thr = np.clip(df["throttle"].to_numpy(float)[order], 0, 100)
-        brk = df["brake"].to_numpy(float)[order]
+        t, speed, brk = t[order], speed[order], brk[order]
+        thr = np.clip(thr[order], 0, 100)
+        if len(t) == 0:
+            self._tele[dn] = {}
+            return {}
         # Median-filter(3) removes one-sample blips.
         thr = _med3(thr)
         brk = _med3(brk)
@@ -194,8 +255,10 @@ class RaceData:
         if np.max(np.diff(t)) > MAX_SAMPLE_GAP_S + 1e-3 or t[-1] < 0.9 * (row.t1 - row.t0):
             return None
         sp = tele["speed"][a:b]
+        if not (np.all(np.isfinite(sp)) and np.all(np.isfinite(tele["throttle"][a:b]))):
+            return None
         dist = np.concatenate([[0.0], np.cumsum((sp[1:] + sp[:-1]) / 2 / 3.6 * np.diff(t))])
-        if dist[-1] < 1000:
+        if not np.isfinite(dist[-1]) or dist[-1] < 1000:
             return None
         return {"t": t, "speed": sp, "throttle": tele["throttle"][a:b],
                 "brake": tele["brake"][a:b], "dist": dist, "frac": dist / dist[-1]}
@@ -215,7 +278,9 @@ def _med3(x: np.ndarray) -> np.ndarray:
 
 def load_race(session: dict) -> RaceData:
     key = session["session_key"]
-    g = lambda ep: openf1.get(ep, {"session_key": key})
+    ttl = openf1.recent_ttl(session)       # results of a race that just ended are provisional
+    g = lambda ep: openf1.get(ep, {"session_key": key},
+                              max_age=ttl if ep in ("laps", "session_result") else None)
 
     drv = pd.DataFrame(g("drivers")).drop_duplicates("driver_number")
     last = drv.last_name.fillna("").astype(str)
@@ -236,6 +301,8 @@ def load_race(session: dict) -> RaceData:
         if col not in rc:
             rc[col] = None
 
+    result = _normalize_result(result)
+    pits = _normalize_pits(pits)
     result = result.sort_values("position", na_position="last").reset_index(drop=True)
     total_laps = int(result.number_of_laps.max())
 
@@ -270,6 +337,7 @@ def load_race(session: dict) -> RaceData:
         laps.loc[idx, "t0"] = t0
         laps.loc[idx, "t1"] = end
 
+    stints = normalize_stints(stints, laps)
     rd = RaceData(session=session, drivers=drv, laps=laps, stints=stints, pits=pits,
                   result=result, rc=rc, total_laps=total_laps, race_start=race_start)
     rd._lapkey = {(int(r.driver_number), int(r.lap_number)): i for i, r in laps.iterrows()}
@@ -278,6 +346,53 @@ def load_race(session: dict) -> RaceData:
     _flag_laps(rd)
     _build_stops(rd)
     return rd
+
+
+def _normalize_result(result: pd.DataFrame) -> pd.DataFrame:
+    """Clean types of session_result: null dns/dnf -> False, missing laps -> 0, duration numeric."""
+    result = result.copy()
+    for col in ("dns", "dnf", "dsq"):
+        result[col] = [truthy(v) for v in result[col]] if col in result else False
+    result["number_of_laps"] = [as_int(v) for v in result["number_of_laps"]] if "number_of_laps" in result else 0
+    result["duration"] = (pd.to_numeric(result["duration"], errors="coerce")
+                          if "duration" in result else float("nan"))
+    if "position" not in result:
+        result["position"] = float("nan")
+    return result
+
+
+def _normalize_pits(pits: pd.DataFrame) -> pd.DataFrame:
+    pits = pits.copy()
+    for col in ("driver_number", "date", "lap_number", "lane_duration"):
+        if col not in pits:
+            pits[col] = pd.Series(dtype=float)
+    return pits
+
+
+def normalize_stints(stints: pd.DataFrame, laps: pd.DataFrame) -> pd.DataFrame:
+    """Integer stints without holes.
+
+    A null in a pandas column turns it into floats with NaN (which is truthy and
+    cannot be int()-ed). Rows without a start lap are dropped, a missing lap_end
+    (an unfinished stint) becomes the driver's last lap, a missing tyre age is 0.
+    """
+    cols = ["driver_number", "stint_number", "lap_start", "lap_end", "compound", "tyre_age_at_start"]
+    st = stints.copy()
+    for c in cols:
+        if c not in st:
+            st[c] = pd.Series(dtype=object if c == "compound" else float)
+    for c in ("driver_number", "stint_number", "lap_start", "lap_end", "tyre_age_at_start"):
+        st[c] = pd.to_numeric(st[c], errors="coerce")
+    st = st[st.driver_number.notna() & st.lap_start.notna()].copy()
+    last_lap = laps.groupby("driver_number").lap_number.max().to_dict() if len(laps) else {}
+    st["lap_end"] = [le if pd.notna(le) else last_lap.get(int(dn), ls)
+                     for le, dn, ls in zip(st.lap_end, st.driver_number, st.lap_start)]
+    st["tyre_age_at_start"] = st.tyre_age_at_start.fillna(0)
+    st["stint_number"] = [sn if pd.notna(sn) else i + 1 for i, sn in enumerate(st.stint_number)]
+    for c in ("driver_number", "stint_number", "lap_start", "lap_end", "tyre_age_at_start"):
+        st[c] = st[c].astype(int)
+    st["compound"] = st.compound.fillna("UNKNOWN").astype(str)
+    return st.reset_index(drop=True)
 
 
 def _build_windows(rd: RaceData) -> None:
@@ -295,13 +410,34 @@ def _build_windows(rd: RaceData) -> None:
         msg = str(r.message).upper()
         kind = "VSC" if ("VSC" in msg or "VIRTUAL" in msg) else "SC"
         if "DEPLOYED" in msg:
-            start[kind] = r.epoch
+            if kind == "SC" and start["VSC"] is not None:
+                # A VSC that becomes a full safety car is never announced as "ending":
+                # close it here, or it would stay open until the end of the race.
+                rd.windows.append(("VSC", start["VSC"], r.epoch))
+                start["VSC"] = None
+            if start[kind] is None:
+                start[kind] = r.epoch
         elif ("IN THIS LAP" in msg or "ENDING" in msg or "ENDED" in msg) and start[kind] is not None:
             rd.windows.append((kind, start[kind], end_of_leader_lap(r.epoch)))
             start[kind] = None
+    race_end = float(np.nanmax(rd.laps.t1)) if len(rd.laps) else float("nan")
     for kind, s in start.items():          # never ended (rare): until the end
         if s is not None:
-            rd.windows.append((kind, s, float(rd.laps.t1.max())))
+            rd.windows.append((kind, s, race_end))
+
+    # Red flag: from the red flag to the message that says the race resumes (never resumed: until the end).
+    # Laps in that window are neutral (nobody races), and the first green lap after it is a restart lap.
+    red = None
+    for _, r in rc.iterrows():
+        msg = str(r.message).upper()
+        if red is None:
+            if str(r.flag).upper() == "RED" and str(r.get("scope")) in ("Track", "None", "nan"):
+                red = r.epoch
+        elif "RESUME" in msg or "SESSION STARTED" in msg or "RACE RESTART" in msg:
+            rd.windows.append(("RED", red, r.epoch))
+            red = None
+    if red is not None:
+        rd.windows.append(("RED", red, race_end))
 
     open_y: dict = {}
     for _, r in rc[rc.category == "Flag"].iterrows():
@@ -339,19 +475,27 @@ def _flag_laps(rd: RaceData) -> None:
             prev = r.neutral
 
     laps["pit_in"] = False
-    laps["pit_out"] = laps.is_pit_out_lap.fillna(False).astype(bool)
+    laps["pit_out"] = ([truthy(v) for v in laps.is_pit_out_lap]
+                       if "is_pit_out_lap" in laps else False)
     st = rd.stints.sort_values(["driver_number", "stint_number"])
     for dn, grp in st.groupby("driver_number"):
         rows = grp.to_dict("records")
         for a, b in zip(rows[:-1], rows[1:]):
-            _mark(rd, dn, int(a["lap_end"]), "pit_in")
-            _mark(rd, dn, int(b["lap_start"]), "pit_out")
+            _mark(rd, dn, as_int(a["lap_end"], -1), "pit_in")
+            _mark(rd, dn, as_int(b["lap_start"], -1), "pit_out")
     for r in rd.pits.itertuples():
-        ts = to_epoch(r.date)
-        hit = laps[(laps.driver_number == r.driver_number) & (laps.t0 <= ts) & (laps.t1 > ts)]
-        for i in hit.index:
-            laps.loc[i, "pit_in"] = True
-            _mark(rd, int(r.driver_number), int(laps.loc[i, "lap_number"]) + 1, "pit_out")
+        dn = as_int(r.driver_number, -1)
+        in_lap = as_int(r.lap_number, -1)      # OpenF1's own lap number of the stop = the in-lap
+        if in_lap < 0:
+            # No lap number: the pit timestamp falls inside the OUT-lap (it is stamped when the car
+            # leaves the pit lane), so the in-lap is the lap before the one that contains it.
+            ts = to_epoch(r.date)
+            hit = laps[(laps.driver_number == dn) & (laps.t0 <= ts) & (laps.t1 > ts)]
+            if not len(hit):
+                continue
+            in_lap = int(hit.lap_number.iloc[0]) - 1
+        _mark(rd, dn, in_lap, "pit_in")
+        _mark(rd, dn, in_lap + 1, "pit_out")
 
 
 def _mark(rd: RaceData, dn: int, lap: int, col: str) -> None:
@@ -377,7 +521,7 @@ def _build_stops(rd: RaceData) -> None:
     for dn, grp in st.groupby("driver_number"):
         rows = grp.to_dict("records")
         for a, b in zip(rows[:-1], rows[1:]):
-            in_lap = int(a["lap_end"])
+            in_lap = as_int(a["lap_end"], -1)
             lr = rd.lap_row(int(dn), in_lap)
             lane, green = None, False
             if lr is not None and np.isfinite(lr.t0):
@@ -389,14 +533,15 @@ def _build_stops(rd: RaceData) -> None:
                     lane = float(v) if pd.notna(v) else None
                     ts = float(hit.epoch.iloc[0])
                     green = not _overlaps(ts - 1, ts + 1, sc_w)
-                    green = green and not bool(lr.neutral) and not bool(nx is not None and nx.neutral)
+                    green = (green and not bool(lr.neutral) and not bool(nx is not None and nx.neutral)
+                             and not bool(lr.restart))      # a restart-lap stop is not a normal green stop
             rd.stops.append(Stop(int(dn), in_lap, str(a["compound"]), str(b["compound"]),
-                                 int(b.get("tyre_age_at_start") or 0), lane, green))
+                                 as_int(b.get("tyre_age_at_start")), lane, green))
 
 
 def results_table(rd: RaceData) -> list[tuple[int, int]]:
     """[(driver_number, position)] — classified first, then others by laps done."""
-    res = rd.result[~rd.result.dns.fillna(False).astype(bool)].copy()
+    res = rd.result[[not truthy(v) for v in rd.result.dns]].copy()
     cls = res[res.position.notna()].sort_values("position")
     rest = res[res.position.isna()].sort_values("number_of_laps", ascending=False)
     out, pos = [], 0

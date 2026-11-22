@@ -102,9 +102,9 @@ export function ordinal(n) {
 }
 
 export const KIND_INFO = {
-  battery_low: { label: 'Battery ran low', bg: '#2E2547', fg: '#C9B6FF' },
-  energy_saving: { label: 'Saved energy to attack later', bg: '#13283F', fg: '#9CC8FF' },
-  tyre_wear: { label: 'Tyres wore out', bg: '#2F2A12', fg: '#EBD57A' },
+  battery_low: { label: 'Lost power (maybe battery)', bg: '#2E2547', fg: '#C9B6FF' },
+  energy_saving: { label: 'Probably saving energy', bg: '#13283F', fg: '#9CC8FF' },
+  tyre_wear: { label: 'Tyres probably wore out', bg: '#2F2A12', fg: '#EBD57A' },
 };
 
 export function kindInfo(kind, fallbackLabel) {
@@ -136,10 +136,11 @@ export function rangeText(low, high) {
   return 'This is a guess: it could be anywhere from ' + secondsPhrase(lo) + ' to ' + secondsPhrase(hi) + '.';
 }
 
+/** Only says what the pipeline computed: is a car within 1.5 s ahead when he comes out? */
 export function trafficText(traffic) {
   return traffic
-    ? 'He comes out behind a slower car and gets stuck.'
-    : 'No car right in front of him to slow him down.';
+    ? 'He’d come out right behind another car, which could cost him time.'
+    : 'No car within 1.5 seconds in front of him when he comes out.';
 }
 
 export function finishKind(real, est) {
@@ -150,8 +151,8 @@ export function finishKind(real, est) {
 export function finishText(real, est) {
   const kind = finishKind(real, est);
   if (kind === 'unknown') return 'We can’t estimate a finish for this one.';
-  if (kind === 'same') return 'He would still finish ' + ordinal(real);
-  return 'He would finish ' + ordinal(est) + ' instead of ' + ordinal(real);
+  if (kind === 'same') return 'He would probably still finish ' + ordinal(real);
+  return 'He would probably finish ' + ordinal(est) + ' instead of ' + ordinal(real);
 }
 
 export function pitLabel(lap, realLap) {
@@ -264,27 +265,98 @@ export function timeAtDistance(path, cum, d) {
   return path[lo][0] + (path[hi][0] - path[lo][0]) * f;
 }
 
+/** Progress (0..1) along the path's own length at time t. */
+export function progressAt(path, cum, t) {
+  const total = cum.length ? cum[cum.length - 1] : 0;
+  return total > 0 ? distanceAt(path, cum, t) / total : 0;
+}
+
+/** Time at which the path had covered the fraction f (0..1) of its own length. */
+export function timeAtProgress(path, cum, f) {
+  const total = cum.length ? cum[cum.length - 1] : 0;
+  return timeAtDistance(path, cum, f * total);
+}
+
+/** Lap time of a prepared car: the official lap time when known, else the end of its path. */
+function lapEnd(c) {
+  return isNum(c.lap) && c.lap > 0 ? c.lap : c.path[c.path.length - 1][0];
+}
+
 /**
- * Who is ahead at time t, and by how many seconds.
- * The gap is "how long after the leader did the other driver reach the spot
- * where the leader is right now" (so it still works after the flag, when both
- * have covered the whole lap). leader is 'a', 'b' or null (side by side).
+ * Each car's clock runs from its own first sample (= the line, t = 0) to its lap time.
+ * For paths cut by the pipeline this changes nothing; for older paths that start a few
+ * tenths after the line or run past the flag it removes the sampling offset.
+ */
+function clockOf(c) {
+  const t0 = c.path[0][0];
+  const span = c.path[c.path.length - 1][0] - t0;
+  const lap = lapEnd(c);
+  return { t0, k: span > 0 && lap > 0 ? span / lap : 1 };
+}
+const progressOf = (c, t) => progressAt(c.path, c.cum, clockOf(c).t0 + Math.max(0, t) * clockOf(c).k);
+const timeOf = (c, f) => (timeAtProgress(c.path, c.cum, f) - clockOf(c).t0) / clockOf(c).k;
+
+/**
+ * Who is ahead at time t, and by how many seconds (a "ghost lap" comparison: both
+ * laps start together at t = 0 and are cut at their lap time).
+ * Progress is the share of each path's own length (0 = line, 1 = line again), so it
+ * does not matter where each path's first sample happened to fall. The gap is "how long
+ * after the leader did the other driver reach the point where the leader is right now".
+ * Once both laps are over the readout is exactly the lap-time difference (final: true).
+ * leader is 'a', 'b' or null (side by side).
  */
 export function gapSeconds(a, b, t) {
-  if (!a.path.length || !b.path.length) return { leader: null, gap: 0 };
-  const d = Math.max(distanceAt(a.path, a.cum, t), distanceAt(b.path, b.cum, t));
-  const ta = timeAtDistance(a.path, a.cum, d);
-  const tb = timeAtDistance(b.path, b.cum, d);
-  const gap = Math.abs(ta - tb);
-  if (gap < 1e-9) return { leader: null, gap: 0 };
-  return { leader: ta < tb ? 'a' : 'b', gap };
+  if (!a.path.length || !b.path.length) return { leader: null, gap: 0, final: false };
+  const endA = lapEnd(a);
+  const endB = lapEnd(b);
+  if (t >= Math.max(endA, endB)) {
+    const diff = endB - endA;
+    return { leader: Math.abs(diff) < 1e-9 ? null : diff > 0 ? 'a' : 'b', gap: Math.abs(diff), final: true };
+  }
+  const f = Math.max(progressOf(a, t), progressOf(b, t));
+  const g = timeOf(b, f) - timeOf(a, f); // > 0: a is ahead
+  if (Math.abs(g) < 1e-9) return { leader: null, gap: 0, final: false };
+  return { leader: g > 0 ? 'a' : 'b', gap: Math.abs(g), final: false };
+}
+
+export const LEAD_ENTER_S = 0.1;  // a car must be this far ahead to be called the leader
+export const LEAD_EXIT_S = 0.05;  // ... and stays the leader until the gap shrinks below this
+
+/**
+ * Readout with hysteresis, so the leader does not flip on noise. The readings are
+ * computed once, in order, on a fixed time grid, so the answer depends only on the
+ * playhead position (never on how the visitor scrubbed). The end is exact.
+ */
+export function makeGapReader(a, b, step = 0.1) {
+  const end = Math.max(a.path.length ? lapEnd(a) : 0, b.path.length ? lapEnd(b) : 0);
+  const steps = Math.max(1, Math.ceil(end / step));
+  const table = [];
+  let lead = null;
+  for (let i = 0; i < steps; i++) {
+    const r = gapSeconds(a, b, i * step);
+    const sg = r.leader === 'a' ? r.gap : r.leader === 'b' ? -r.gap : 0;
+    if (lead === null) {
+      if (Math.abs(sg) >= LEAD_ENTER_S) lead = sg > 0 ? 'a' : 'b';
+    } else if (lead === 'a') {
+      if (sg <= -LEAD_ENTER_S) lead = 'b';
+      else if (sg < LEAD_EXIT_S) lead = null;
+    } else if (sg >= LEAD_ENTER_S) lead = 'a';
+    else if (sg > -LEAD_EXIT_S) lead = null;
+    table.push({ leader: lead, gap: Math.abs(sg), final: false });
+  }
+  const finalResult = gapSeconds(a, b, end + 1);
+  return (t) => {
+    if (t >= end) return finalResult;
+    return table[Math.min(steps - 1, Math.max(0, Math.floor(t / step)))];
+  };
 }
 
 /** Sentence for the big "who is ahead" line. */
 export function aheadText(nameA, nameB, result) {
-  if (!result || !result.leader || result.gap < 0.05) return nameA + ' and ' + nameB + ' are side by side';
+  const tiny = result && result.final ? 0.005 : 0.05;
+  if (!result || !result.leader || result.gap < tiny) return nameA + ' and ' + nameB + ' are side by side';
   const name = result.leader === 'a' ? nameA : nameB;
-  return name + ' is ' + result.gap.toFixed(1) + ' seconds ahead';
+  return name + ' is ' + result.gap.toFixed(result.final ? 2 : 1) + ' seconds ahead';
 }
 
 /** Fit points (any scale) into a w x h box with padding, keeping aspect ratio. */

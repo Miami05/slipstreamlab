@@ -50,13 +50,13 @@ def clean_laps(rd: model.RaceData) -> pd.DataFrame:
     st = rd.stints.sort_values(["driver_number", "stint_number"])
     for dn, grp in st.groupby("driver_number"):
         for s in grp.to_dict("records"):
-            for lap in range(int(s["lap_start"]), int(s["lap_end"]) + 1):
+            for lap in range(model.as_int(s["lap_start"]), model.as_int(s["lap_end"], model.as_int(s["lap_start"])) + 1):
                 r = rd.lap_row(int(dn), lap)
                 if r is None or not model.usable_lap(r) or not np.isfinite(r.dur):
                     continue
-                rows.append({"driver": int(dn), "lap": lap, "stint": int(s["stint_number"]),
+                rows.append({"driver": int(dn), "lap": lap, "stint": model.as_int(s["stint_number"]),
                              "compound": str(s["compound"]),
-                             "age": int(s.get("tyre_age_at_start") or 0) + lap - int(s["lap_start"]),
+                             "age": model.as_int(s.get("tyre_age_at_start")) + lap - model.as_int(s["lap_start"]),
                              "dur": float(r.dur)})
     df = pd.DataFrame(rows, columns=["driver", "lap", "stint", "compound", "age", "dur"])
     if df.empty:
@@ -79,6 +79,7 @@ class Fit:
     se: float             # standard error of the slope
     resid_sd: float
     r2: float
+    age_span: float = 0.0   # tyre ages covered by the clean laps of this stint (laps)
 
 
 def stint_fits(df: pd.DataFrame, min_laps: int = MIN_FIT_LAPS) -> list[Fit]:
@@ -97,8 +98,20 @@ def stint_fits(df: pd.DataFrame, min_laps: int = MIN_FIT_LAPS) -> list[Fit]:
         ss_tot = float(((y - y.mean()) ** 2).sum())
         r2 = 1 - float((res ** 2).sum()) / ss_tot if ss_tot > 0 else 0.0
         out.append(Fit(int(dn), int(stint), str(g.compound.iloc[0]), n, float(slope),
-                       float(raw_slope), float(se), sd, r2))
+                       float(raw_slope), float(se), sd, r2, float(x.max() - x.min())))
     return out
+
+
+MIN_PENALTY_S = 1.0
+
+
+def max_measured_penalty(fits: list[Fit]) -> float:
+    """Largest tyre penalty actually measured in this race: slope x laps covered, per stint (>= 1 s).
+
+    It bounds how much one lap can plausibly cost on worn rubber compared with fresh rubber.
+    """
+    vals = [max(f.slope, 0.0) * f.age_span for f in fits]
+    return max([MIN_PENALTY_S] + vals)
 
 
 def compound_slopes(fits: list[Fit]) -> dict:

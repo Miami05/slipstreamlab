@@ -37,6 +37,7 @@ MIN_LIFT_S = 1.0            # coasting time we care about
 MIN_LIFT_EXCESS_S = 0.55    # ... and how much more than both baselines
 MIN_BASELINE_LAPS = 6
 MAX_STEP_DROP = 15.0        # km/h lost in one sample = braking/glitch, not clipping
+PERSISTENT_SHARE = 0.5      # loss on at least this share of his clean laps there: mentioned in `why` (information only)
 MIN_POST_SAMPLES = 3        # samples after the peak (~0.8 s) needed to judge a fall
 
 
@@ -265,7 +266,10 @@ def detect_from_features(rd, feats: dict, straights: list[Straight], gaps: dict 
                 base = max(field_fall, own)
                 flagged = {lap: fall - base for lap, fall in f_laps.items()
                            if fall >= MIN_FALL_KMH and fall - base >= MIN_EXCESS_KMH}
-                findings += _group(rd, "battery_low", dn, s, flagged, mine, f_laps, base, field_fall, own, gaps)
+                share = float(np.mean([fall >= MIN_FALL_KMH and fall - field_fall >= MIN_EXCESS_KMH
+                                       for fall in f_laps.values()]))
+                findings += _group(rd, "battery_low", dn, s, flagged, mine, f_laps, base, field_fall, own, gaps,
+                                   persistent_share=share)
             # ---------- energy_saving -------------------------------------
             l_laps = {lap: v["lift"]["lift_s"] for lap, v in mine.items() if v["lift"]}
             if len(l_laps) >= MIN_BASELINE_LAPS:
@@ -277,7 +281,8 @@ def detect_from_features(rd, feats: dict, straights: list[Straight], gaps: dict 
     return findings
 
 
-def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_base, own, gaps) -> list[Finding]:
+def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_base, own, gaps,
+           persistent_share: float = 0.0) -> list[Finding]:
     """Turn flagged laps into findings; neighbouring laps become one finding."""
     if not flagged:
         return []
@@ -311,6 +316,11 @@ def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_ba
                 conf = _cap(conf, "medium" if gap >= 0.5 else "low")
         if len(raw) < 10:
             conf = _cap(conf, "medium")
+        persistent = kind == "battery_low" and persistent_share >= PERSISTENT_SHARE
+        if kind == "battery_low":
+            # The power loss is measured, but its cause cannot be told apart from e.g. an
+            # engine-temperature power cut: never "high".
+            conf = _cap(conf, "medium")
         if kind == "battery_low":
             val = raw[best]
             why = (f"accelerator flat out, yet speed fell {val:.0f} km/h before the braking point "
@@ -321,11 +331,16 @@ def _group(rd, kind, dn, s, flagged: dict, mine: dict, raw: dict, base, field_ba
                    f"({score:.1f} s more than usual for him and for the field)")
         if n >= 2:
             why += f", repeated on {n} laps in a short spell"
+        if persistent:
+            # Informational only: repeated loss can be normal on an energy-starved track, or a car problem.
+            why += (f"; it happened on most laps ({persistent_share:.0%} of his clean laps there), "
+                    "which can also mean a car problem")
         if notes:
             why += "; " + notes[0]
         out.append(Finding(kind, dn, best, g, s.idx, score, conf, why,
                            {"value": float(val), "base": float(base), "field": float(field_base),
-                            "own": float(own), "unit": unit, "n_laps": n, "gap_ahead": gap}))
+                            "own": float(own), "unit": unit, "n_laps": n, "gap_ahead": gap,
+                            "persistent": persistent, "persistent_share": float(persistent_share)}))
     return out
 
 

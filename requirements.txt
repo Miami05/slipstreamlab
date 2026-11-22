@@ -1,4 +1,8 @@
-numpy
-pandas
-matplotlib
-pytest
+# Ranges that were actually run (Python 3.14): pandas 2.3.3 and 3.1.1, numpy 2.5.5,
+# matplotlib 3.11.2, Pillow 13.0.0, pytest 9.2.0. Upper bounds stop a future major
+# release from breaking a fresh install (pandas 3 changed datetime resolution).
+numpy>=2.3,<3
+pandas>=2.3,<4
+matplotlib>=3.11,<4
+pillow>=13,<14
+pytest>=9,<10

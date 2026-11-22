@@ -1,8 +1,8 @@
 // Screen 3: Compare two drivers, one lap
 import {
   bootPage, el, svgEl, clear, fetchJSON, fetchOptional, EmptyError, driverMap, lastName, colorFor,
-  lightenForText, colorsClose, mixWithWhite, fitPoints, interpolatePath, cumulativeDistances, distanceAt,
-  gapSeconds, aheadText, formatLapTime, validTrack, validPath, clamp, isNum,
+  lightenForText, colorsClose, mixWithWhite, fitPoints, interpolatePath, cumulativeDistances,
+  makeGapReader, aheadText, formatLapTime, validTrack, validPath, clamp, isNum,
 } from './common.js';
 
 const MW = 600;
@@ -11,15 +11,7 @@ const FONT = 'Inter, system-ui, sans-serif';
 const NORMAL_SECONDS = 20; // a whole lap plays in about 20 s at normal speed
 const SLOW_FACTOR = 0.25;
 
-/** Is the key moment an overtake (the lead changes around it)? */
-export function isOvertake(a, b, duration, frac) {
-  if (!isNum(frac) || !duration) return false;
-  const eps = Math.max(0.5, duration * 0.03);
-  const t = frac * duration;
-  const before = distanceAt(a.path, a.cum, t - eps) - distanceAt(b.path, b.cum, t - eps);
-  const after = distanceAt(a.path, a.cum, t + eps) - distanceAt(b.path, b.cum, t + eps);
-  return before * after < 0;
-}
+export const GHOST_NOTE = 'Both laps start together, like a ghost car — this isn\'t their real gap on track.';
 
 function render(data, ctx) {
   const { race, compare } = data;
@@ -53,6 +45,7 @@ function render(data, ctx) {
   ctx.content.appendChild(el('div', { class: 'toolbar' },
     el('div', null, sub, h1), pairSlot));
   ctx.content.appendChild(aheadEl);
+  ctx.content.appendChild(el('p', { class: 'hint', text: GHOST_NOTE }));
   ctx.content.appendChild(el('section', { class: 'card', style: 'gap:16px' },
     svg,
     el('div', { class: 'player' },
@@ -76,6 +69,9 @@ function render(data, ctx) {
     const endB = b.path[b.path.length - 1][0];
     const lapA = isNum(p.lap_time_a) && p.lap_time_a > 0 ? p.lap_time_a : endA;
     const lapB = isNum(p.lap_time_b) && p.lap_time_b > 0 ? p.lap_time_b : endB;
+    a.lap = lapA;
+    b.lap = lapB;
+    const reader = makeGapReader(a, b);
     const duration = Math.max(lapA, lapB, endA, endB) || 1;
     const fit = fitPoints(p.track, MW, MH, 36);
     const nameA = lastName(drivers, p.a);
@@ -84,7 +80,7 @@ function render(data, ctx) {
     let colorB = colorFor(drivers, p.b, '#4EA8FF');
     let altB = false;
     if (colorsClose(colorA, colorB)) { colorB = mixWithWhite(colorB, 0.5); altB = true; }
-    return { p, a, b, duration, fit, nameA, nameB, colorA, colorB, altB, lapA, lapB };
+    return { p, a, b, duration, fit, nameA, nameB, colorA, colorB, altB, lapA, lapB, reader };
   }
 
   function drawStatic() {
@@ -135,7 +131,7 @@ function render(data, ctx) {
     };
     place(cur.txtA, ax, ay, aAbove);
     place(cur.txtB, bx, by, !aAbove);
-    const result = gapSeconds(a, b, t);
+    const result = cur.reader(t);
     const text = aheadText(nameA, nameB, result);
     if (aheadEl.textContent !== text) aheadEl.textContent = text;
     const v = Math.round((t / duration) * 1000);
@@ -188,8 +184,7 @@ function render(data, ctx) {
     lapTimesEl.textContent = tA && tB ? 'Lap times: ' + cur.nameA + ' ' + tA + ' · ' + cur.nameB + ' ' + tB : '';
     const frac = isNum(p.key_moment_frac) ? clamp(p.key_moment_frac, 0, 1) : null;
     if (frac !== null) {
-      const overtake = isOvertake(cur.a, cur.b, cur.duration, frac);
-      markerLabel.textContent = overtake ? 'Overtake' : 'Key moment';
+      markerLabel.textContent = 'Key moment';
       markerLabel.style.left = (frac * 100).toFixed(1) + '%';
       markerTick.style.left = (frac * 100).toFixed(1) + '%';
       markerLabel.hidden = false;

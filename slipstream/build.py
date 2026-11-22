@@ -7,9 +7,10 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from . import compare as cmp
-from . import energy, model, story, tyres, validate, whatif
+from . import energy, model, openf1, story, tyres, validate, whatif
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DATA = ROOT / "web" / "data"
@@ -43,15 +44,21 @@ def write_json(path: Path, obj) -> int:
 # Moments
 # ----------------------------------------------------------------------------
 
-def _pick_comparison(rd, ctx, f) -> tuple[int | None, bool]:
+def _pick_comparison(rd, ctx, f, measure=None, mine=None) -> tuple[int | None, bool]:
     """Teammate first, then nearest in the standings, who had a clean lap there.
 
     A car that did the same thing (>= half the driver's loss) is no useful
     comparison: skip it. If the teammate did the same, say so (shared cause).
+
+    measure(driver) -> the comparison car's number, measured the same way as `mine`
+    (for battery moments: the speed drop inside the shaded zone of the plotted chart,
+    so the caption can never contradict the picture). Without it the detection
+    features are used.
     """
     feats, traces = ctx["feats"], ctx["traces"]
     key, fld = ("clip", "fall") if f.kind == "battery_low" else ("lift", "lift_s")
-    mine = feats[(f.driver, f.lap, f.straight)][key][fld]
+    if mine is None:
+        mine = feats[(f.driver, f.lap, f.straight)][key][fld]
     mate = rd.teammate(f.driver)
     pos = {d: p for d, p in model.results_table(rd)}
     order = ([mate] if mate is not None else []) + sorted(
@@ -61,12 +68,30 @@ def _pick_comparison(rd, ctx, f) -> tuple[int | None, bool]:
     for d in order:
         if (d, f.lap) not in traces:
             continue
-        o = feats.get((d, f.lap, f.straight), {}).get(key)
-        if o and o[fld] >= 0.5 * mine:
+        if measure is not None:
+            o = measure(d)
+            if o is None:               # no usable chart line for this car
+                continue
+        else:
+            oo = feats.get((d, f.lap, f.straight), {}).get(key)
+            o = oo[fld] if oo else None
+        if o is not None and o >= 0.5 * mine:
             mate_similar = mate_similar or d == mate
             continue
         return int(d), mate_similar
     return None, mate_similar
+
+
+def zone_drop(points, zone) -> float | None:
+    """Speed lost inside the shaded zone of a speed chart: highest speed in the zone minus the
+    lowest speed after it (km/h). Measured on the exact points that are drawn."""
+    if not points or not zone:
+        return None
+    ys = [y for x, y in points if zone[0] <= x <= zone[1]]
+    if len(ys) < 3:
+        return None
+    pk = max(range(len(ys)), key=lambda i: ys[i])
+    return float(ys[pk] - min(ys[pk:]))
 
 
 def _speed_series(rd, ctx, dn, lap, s):
@@ -87,35 +112,49 @@ def _energy_moment(rd, ctx, f):
     s = ctx["straights"][f.straight]
     feats = ctx["feats"]
     me = feats[(f.driver, f.lap, f.straight)]
-    other, mate_similar = _pick_comparison(rd, ctx, f)
     last = rd.drivers.loc[f.driver, "last_name"]
+    my_pts = _speed_series(rd, ctx, f.driver, f.lap, s)
+    if not my_pts:
+        return None
     if f.kind == "battery_low":
         c = me["clip"]
         zone = [round(min(c["peak_x"], c["end_x"]), 3), round(max(c["peak_x"], c["end_x"]), 3)]
-        value = c["fall"]
-        ov = feats.get((other, f.lap, f.straight), {}).get("clip") if other else None
-        other_value = ov["fall"] if ov else None
-        y_label = "Speed (km/h)"
+        zone[1] = max(zone[1], zone[0] + 0.01)
+        # Caption numbers are measured on the plotted lines inside the shaded zone.
+        value = zone_drop(my_pts, zone)
+        if value is None:
+            value = c["fall"]
+        other, mate_similar = _pick_comparison(
+            rd, ctx, f, mine=value,
+            measure=lambda d: zone_drop(_speed_series(rd, ctx, d, f.lap, s), zone))
+        other_pts = _speed_series(rd, ctx, other, f.lap, s) if other else None
+        other_value = zone_drop(other_pts, zone) if other_pts else None
+        if other is not None and other_value is None:
+            other = None
     else:
         l = me["lift"]
         zone = [round(min(l["coast_x"], l["brake_x"]), 3), round(max(l["coast_x"], l["brake_x"]), 3)]
+        zone[1] = max(zone[1], zone[0] + 0.01)
         value, other_value = l["lift_s"], None
-        y_label = "Speed (km/h)"
-    zone[1] = max(zone[1], zone[0] + 0.01)
+        other, mate_similar = _pick_comparison(rd, ctx, f)
+        other_pts = _speed_series(rd, ctx, other, f.lap, s) if other else None
+        if other is not None and not other_pts:
+            other = None
+    y_label = "Speed (km/h)"
     conf, why = f.confidence, f.why
     if mate_similar:
         conf = "medium" if conf == "high" else conf
         why += ("; his teammate lost speed in the same place, so the cause may be shared" if f.kind == "battery_low"
                 else "; his teammate coasted there too, so the cause may be shared")
+    if f.kind == "battery_low":
+        # `why` quotes the detector's own number; show the same (chart-measured) number everywhere
+        why = why.replace(f"fell {f.detail['value']:.0f} km/h", f"fell {value:.0f} km/h", 1)
     texts = story.speed_moment(f.kind, last, f.lap, value, f.score,
-                               rd.drivers.loc[other, "last_name"] if other else None, other_value)
-    series = []
-    for dn in [f.driver] + ([other] if other else []):
-        pts = _speed_series(rd, ctx, dn, f.lap, s)
-        if pts:
-            series.append({"driver": rd.code(dn), "points": pts})
-    if not series or series[0]["driver"] != rd.code(f.driver):
-        return None
+                               rd.drivers.loc[other, "last_name"] if other else None, other_value,
+                               persistent=bool(f.detail.get("persistent")))
+    series = [{"driver": rd.code(f.driver), "points": my_pts}]
+    if other:
+        series.append({"driver": rd.code(other), "points": other_pts})
     chart = {"type": "speed", "title": texts["chart_title"], "x_label": "Along the straight →",
              "y_label": y_label, "zone": zone, "zone_label": texts["zone_label"], "series": series}
     return {"driver": f.driver, "lap": f.lap, "kind": f.kind, "confidence": conf, "why": why,
@@ -166,8 +205,42 @@ def select_moments(cands: list[dict]) -> list[dict]:
 # Main build
 # ----------------------------------------------------------------------------
 
+def winning_margin(result: pd.DataFrame) -> float | None:
+    """Seconds between P1 and P2, or None when it is not a plain number.
+
+    gap_to_leader holds strings such as "+1 LAP" for a lapped runner-up and None for
+    missing values, so it is coerced instead of passed to np.isfinite.
+    """
+    p2 = result[result.position == 2]
+    if not len(p2) or "gap_to_leader" not in p2:
+        return None
+    g = pd.to_numeric(pd.Series([p2.gap_to_leader.iloc[0]]), errors="coerce").iloc[0]
+    return float(g) if pd.notna(g) and np.isfinite(g) else None
+
+
+def pick_compare_lap(rd, a: int, b: int, start: int, last: int) -> int | None:
+    """First lap in [start, last] on which both drivers have a clean racing lap, else None.
+
+    (A tyre-wear moment names a rival who was clean over the stint, but he may have been
+    in the pits on that very lap: a racing lap must never be compared with a pit lap.)
+    """
+    for lap in range(int(start), int(last) + 1):
+        ra, rb = rd.lap_row(a, lap), rd.lap_row(b, lap)
+        if ra is None or rb is None:
+            continue
+        if model.usable_lap(ra) and model.usable_lap(rb) and np.isfinite(ra.dur) and np.isfinite(rb.dur):
+            return lap
+    return None
+
+
 def build(year: int, rnd: int | None = None, latest: bool = False, out_root: Path | None = None,
-          log=print) -> dict:
+          log=print, refresh: bool = False) -> dict:
+    """Build one race. refresh=True ignores the OpenF1 disk cache for this race (and refills it)."""
+    with openf1.refreshing(refresh):
+        return _build(year, rnd, latest, out_root, log)
+
+
+def _build(year, rnd, latest, out_root, log) -> dict:
     t_start = time.time()
     out_root = out_root or WEB_DATA
     session = model.latest_session(year) if latest else model.session_for_round(year, rnd)
@@ -216,11 +289,11 @@ def build(year: int, rnd: int | None = None, latest: bool = False, out_root: Pat
                         "caption": caption})
     sc_laps = rd.safety_car_laps()
     win_dn = results[0][0]
-    p2 = rd.result[rd.result.position == 2]
-    gap = float(p2.gap_to_leader.iloc[0]) if len(p2) and np.isfinite(p2.gap_to_leader.iloc[0]) else None
+    gap = winning_margin(rd.result)
     head = story.headline(rd.drivers.loc[win_dn, "last_name"], gap, sc_laps, len(moments),
-                          vsc_laps=rd.safety_car_laps("VSC") if not sc_laps else None)
-    race = {"slug": slug, "name": name, "location": location, "date": session["date_start"][:10],
+                          vsc_laps=rd.safety_car_laps("VSC"))
+    date = model.local_date(session)          # the circuit's local date, not the UTC one
+    race = {"slug": slug, "name": name, "location": location, "date": date,
             "total_laps": rd.total_laps, "drivers": drivers,
             "results": [{"code": rd.code(dn), "position": pos} for dn, pos in results],
             "safety_car_laps": sc_laps, "headline": head, "moments": moments}
@@ -234,8 +307,15 @@ def build(year: int, rnd: int | None = None, latest: bool = False, out_root: Pat
     pairs = []
     want = []
     for m in chosen:
-        if m.get("other") is not None:
-            want.append((m["driver"], m["other"], m["lap"]))
+        if m.get("other") is None:
+            continue
+        if m["kind"] == "tyre_wear":
+            last_lap = m["chart"]["zone"][1]
+            lap = pick_compare_lap(rd, m["driver"], m["other"], m["lap"], last_lap)
+        else:
+            lap = m["lap"]       # energy moments only pick rivals who have a clean trace on this lap
+        if lap:
+            want.append((m["driver"], m["other"], lap))
             break
     if len(results) >= 2:
         a, b = results[0][0], results[1][0]
@@ -270,7 +350,7 @@ def build(year: int, rnd: int | None = None, latest: bool = False, out_root: Pat
     _write_social_extras(slug, race, chosen, rd)
     index_entry = {"slug": slug, "session_key": int(session["session_key"]), "year": int(year),
                    "round": int(rnd), "name": name, "location": location,
-                   "date": session["date_start"][:10], "has_compare": bool(pairs)}
+                   "date": date, "has_compare": bool(pairs)}
     _merge_index(out_root, index_entry)
 
     secs = time.time() - t_start
@@ -296,7 +376,10 @@ def _text_checks(race, compare_obj) -> None:
         texts += [m["label"], m["why"], m["caption"], m["chart"]["title"], m["chart"]["zone_label"],
                   m["chart"]["x_label"], m["chart"]["y_label"]]
     texts += [p["summary"] for p in compare_obj["pairs"]]
-    bad = []
+    bad = [f"cause not hedged (needs 'probably'/'likely'): {m['label']!r}" for m in race["moments"]
+           if not story.is_hedged(m["label"])]
+    bad += [f"cause not hedged: {m['caption']!r}" for m in race["moments"]
+            if not story.is_hedged(m["caption"])]
     for t in texts:
         bad += [f"{h!r} in {t!r}" for h in story.banned_hits(t)]
         bad += [f"code {c} in {t!r}" for c in story.bare_codes(t, codes)]
