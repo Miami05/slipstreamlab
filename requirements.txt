@@ -6,3 +6,5 @@ pandas>=2.3,<4
 matplotlib>=3.11,<4
 pillow>=13,<14
 pytest>=9,<10
+# Bundled ffmpeg for MP4 social videos (no system install needed); GIF fallback if missing.
+imageio-ffmpeg>=0.6,<1

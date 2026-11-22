@@ -205,6 +205,18 @@ def render_png(race, moment, extras, path: Path) -> None:
     sc.close()
 
 
+def find_ffmpeg() -> str | None:
+    """ffmpeg for MP4 export: a system install, else the copy bundled with imageio-ffmpeg."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # not installed or no binary for this platform -> GIF fallback
+        return None
+
+
 def render_video(race, moment, extras, path_base: Path) -> Path:
     """Lines draw left to right (~4 s), the zone fades in, the big number pops."""
     from matplotlib import animation
@@ -221,9 +233,11 @@ def render_video(race, moment, extras, path_base: Path) -> Path:
         sc.update(p, pop if i < total else 1.0)
         return []
 
-    use_ffmpeg = shutil.which("ffmpeg") is not None
+    ffmpeg = find_ffmpeg()
     anim = animation.FuncAnimation(sc.fig, frame, frames=total, blit=False)
-    if use_ffmpeg:
+    if ffmpeg:
+        import matplotlib
+        matplotlib.rcParams["animation.ffmpeg_path"] = ffmpeg
         out = path_base.with_suffix(".mp4")
         anim.save(out, writer=animation.FFMpegWriter(fps=FPS, codec="libx264",
                                                      extra_args=["-pix_fmt", "yuv420p"]), dpi=DPI)
