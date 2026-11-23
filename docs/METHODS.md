@@ -251,7 +251,8 @@ not a win); "unknown" cases are information. `--strict` exits with 1 on any fail
 
 Caveats: Hulkenberg (Mexico) is "gone" only because his lift is now in traffic, so its
 confidence fell to low, and low-confidence findings are hidden when at least three confident ones
-exist (the per-kind cap of 3 applies to them too, and the headline counts them apart as "less
+exist (low-confidence fill-ins have their own cap of at most 2 per kind, 1 for power cut, counted apart
+from the confident ones, and the headline counts them apart as "less
 certain"). Albon (USA) survives only as a low-confidence finding. Removing the confident findings
 lets other low-confidence ones appear that nobody has checked yet.
 

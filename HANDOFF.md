@@ -13,10 +13,10 @@ Start with [README.md](README.md), then [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 |---|---|
 | Pipeline (OpenF1 → JSON) | ✅ works on 5 real 2026 races (Budapest, USA, Mexico, Brazil, Las Vegas) |
 | Website (3 pages) | ✅ works on real data and on the demo (`?data=sample`) |
-| Social images (1080×1920, safe zones) | ✅ PNG; GIF when ffmpeg is missing |
+| Social images/videos (1080×1920, safe zones) | ✅ PNG + MP4 (H.264, bundled ffmpeg via imageio-ffmpeg; GIF only as fallback) |
 | Tests | ✅ pytest (no network) + Node tests; CI in `.github/workflows/tests.yml` |
 | Real-world validation | ⚠️ 4 races checked: after fixes 5 of 6 wrong causes removed, 9 of 9 plausible kept. See [docs/VALIDATION.md](docs/VALIDATION.md) |
-| Code review | Fable + Neon (Gemini) + Sol verify — workflow `.claude/workflows/slipstream-review.js`. Two rounds done; last reviewed commit `fccb271`. The fixes after it were checked by tests + `evaluate` only — use `{"base": "fccb271"}` next time. |
+| Code review | Fable + Neon (Gemini) + Sol verify — workflow `.claude/workflows/slipstream-review.js`. Three rounds done; the third reviewed everything after `fccb271` (incl. MP4 export) and its 5 findings are fixed. Next review: `{"base": "17abbce"}`. |
 | Hosting | ❌ not deployed yet (local only) |
 
 ## Key decisions (and why)

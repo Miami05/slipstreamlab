@@ -671,3 +671,31 @@ def test_a_blue_flag_lap_is_never_the_reference_car_for_a_lift():
     f.straight = 0
     other, _ = build._pick_comparison(rd, {"feats": feats, "traces": traces}, f)
     assert other == 3 and other != 2
+
+
+# --- third review round -------------------------------------------------------
+
+def test_red_sentence_never_restarted_vs_restarted():
+    from slipstream import story
+    assert "was not restarted" in story.red_sentence(list(range(40, 51)), total_laps=50)
+    assert "started again later" in story.red_sentence([45, 46], total_laps=71)
+
+
+def test_power_cut_needs_race_lap_span_not_only_clean_laps():
+    from slipstream import powercut
+    dn, mate = 1, 2
+    dev = {}
+    # only 12 shared clean laps, all at the very end of a 60-lap race, with a big deficit
+    for lap in range(49, 61):
+        dev[(dn, lap)] = -20.0
+        dev[(mate, lap)] = 0.0
+    assert powercut.detect_driver(dn, mate, dev, total_laps=60) is None
+
+
+def test_evaluate_strict_fails_when_races_missing(tmp_path, monkeypatch):
+    from slipstream import evaluate
+    monkeypatch.setattr(evaluate, "load_moments", lambda *a, **k: {})   # nothing built
+    out = []
+    code = evaluate.run(strict=True, log=out.append)
+    assert code == 1
+    assert any("NOT VALIDATED" in line for line in out)

@@ -132,10 +132,12 @@ def run(rd: model.RaceData, df=None, fits=None) -> dict:
 
     out = {}
     skipped_rain = 0
+    had_green_stop = 0
     for dn in sorted(rd.drivers.index):
         gstops = [s for s in rd.stops if s.driver == dn and s.green and 3 <= s.in_lap < N - 1]
         if not gstops or dn not in results:
             continue
+        had_green_stop += 1
         S = min(gstops, key=lambda s: s.in_lap)
         stints = rd.stints[rd.stints.driver_number == dn].sort_values("stint_number").to_dict("records")
         k = next((i for i, st in enumerate(stints) if model.as_int(st["lap_end"], -1) == S.in_lap), None)
@@ -172,9 +174,9 @@ def run(rd: model.RaceData, df=None, fits=None) -> dict:
         if options:
             out[rd.code(dn)] = {"real_pit_lap": int(L), "real_finish": int(results[dn]), "options": options}
     res = {"pit_loss_s": round(float(pit_loss), 1), "drivers": out, "_pit_loss_method": how}
-    if not out and skipped_rain:
-        res["unavailable"] = ("The “what if?” is not offered for this race: the first stops were between rain tyres "
-                              "and dry tyres, which depend on the weather and not on how worn the tyres were.")
+    if not out and skipped_rain and skipped_rain * 2 >= had_green_stop:
+        res["unavailable"] = ("The “what if?” is not offered for this race: most first stops were made on or onto "
+                              "rain tyres, so their timing depended on the weather, not on how worn the tyres were.")
     return res
 
 

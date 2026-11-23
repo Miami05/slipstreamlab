@@ -141,4 +141,8 @@ def run(strict: bool = False, log=print) -> int:
     for r in lost:
         log(f"  REGRESSION: plausible case lost: {r['race']} {r['driver']} {r['kind']} lap {r['lap']}")
     bad = s["wrong_fixed"] < s["wrong_total"] or lost
+    if strict and s["missing_races"]:
+        log("NOT VALIDATED: these validation races are not built, so their cases were not checked: "
+            + ", ".join(s["missing_races"]) + ". Build them before relying on --strict.")
+        return 1
     return 1 if (strict and bad) else 0

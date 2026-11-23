@@ -70,7 +70,7 @@ def lap_deviation(feats: dict, straights) -> dict[tuple[int, int], float]:
     return {k: float(np.mean(v)) for k, v in per.items() if len(v) >= MIN_STRAIGHTS}
 
 
-def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset()) -> PowerCut | None:
+def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: int | None = None) -> PowerCut | None:
     # Clean air only: a car in a tow is faster in a straight line, so a pair where one car follows
     # and the other does not would show a deficit that is only the tow. Too few clean laps = no verdict.
     laps = sorted(l for (d, l) in dev if d == dn and (mate, l) in dev
@@ -84,19 +84,21 @@ def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset()) -> PowerCut |
     for i in range(0, len(laps) - need + 1):
         if not low[i]:
             continue                        # the spell starts on a lap that shows the deficit
+        if total_laps and (laps[-1] - laps[i] + 1) < MIN_COVERAGE * total_laps:
+            continue                        # "most of the race" must also hold in race laps, not just clean laps
         if low[i:].mean() >= MIN_SHARE and float(np.median(mine[i:])) <= -MIN_FIELD_DROP_KMH:
             return PowerCut(dn, mate, int(laps[i]), len(laps) - i, float(low[i:].mean()),
                             float(np.median(diff[i:])), float(np.median(mine[i:])))
     return None
 
 
-def detect(dev: dict, mates: dict[int, int | None], skip=frozenset()) -> dict[int, PowerCut]:
+def detect(dev: dict, mates: dict[int, int | None], skip=frozenset(), total_laps: int | None = None) -> dict[int, PowerCut]:
     out = {}
     for dn in sorted({d for d, _ in dev}):
         mate = mates.get(dn)
         if mate is None:
             continue
-        pc = detect_driver(dn, mate, dev, skip)
+        pc = detect_driver(dn, mate, dev, skip, total_laps)
         if pc:
             out[dn] = pc
     return out
@@ -113,7 +115,7 @@ def apply(rd, findings: list, ctx: dict, traffic: dict | None = None) -> dict[in
     dev = lap_deviation(ctx["feats"], ctx["straights"])
     skip = {k for k, v in traffic.items() if v >= 0.5}
     mates = {int(d): rd.teammate(int(d)) for d in rd.drivers.index}
-    cuts = detect(dev, mates, skip)
+    cuts = detect(dev, mates, skip, getattr(rd, "total_laps", None))
     ctx["power_cuts"] = cuts
     order = {"low": 0, "medium": 1, "high": 2}
     for f in findings:

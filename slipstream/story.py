@@ -80,11 +80,13 @@ def rain_sentence(rain_laps: list[int], total_laps: int) -> str:
     return (f"Rain came and went, on {_when_all(runs)}, so we left those laps out of the tyre and power readings.")
 
 
-def red_sentence(red_laps: list[int]) -> str:
+def red_sentence(red_laps: list[int], total_laps: int | None = None) -> str:
     runs = lap_runs(red_laps or [])
     if not runs:
         return ""
     if len(runs) == 1:
+        if total_laps and runs[0][1] >= total_laps - 1:   # red window ran to the end: never restarted
+            return f"The race was stopped with a red flag on lap {runs[0][0]} and was not restarted."
         return f"The race was stopped with a red flag on lap {runs[0][0]} and started again later."
     return f"The race was stopped with a red flag more than once, on {_when_all(runs)}."
 
@@ -127,7 +129,7 @@ def headline(winner: str, gap_s: float | None, sc_laps: list[int], n_moments: in
             found += (", plus one less certain one." if n_low == 1 else f", plus {n_low} less certain ones.")
         else:
             found += "."
-    red = red_sentence(red_laps or [])
+    red = red_sentence(red_laps or [], total_laps)
     parts = [x for x in (sc, red, rain_sentence(rain_laps or [], total_laps), vsc, found) if x]
     if len(parts) > (4 if red else 3) and vsc:
         parts.remove(vsc)            # at most 3 sentences (4 with a red flag): the short slow spell matters least
