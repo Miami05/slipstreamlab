@@ -880,3 +880,18 @@ def test_power_cut_is_switched_off_in_the_pipeline():
     ctx = {"feats": {"x": 1}, "straights": []}
     assert powercut.ENABLED is False
     assert powercut.apply(None, [], ctx, traffic={}) == {} and ctx["power_cuts"] == {}
+
+
+def test_speed_chart_line_stops_where_that_driver_starts_braking():
+    import numpy as np
+    from types import SimpleNamespace
+    n = 60
+    frac = np.linspace(0, 1, n)
+    speed = np.concatenate([np.linspace(250, 330, 40), np.linspace(330, 200, 20)])   # brakes from sample 40
+    brake = np.array([0] * 40 + [100] * 20)
+    throttle = np.array([100] * 40 + [0] * 20)
+    ctx = {"traces": {(1, 5): {"frac": frac, "speed": speed, "brake": brake, "throttle": throttle}}}
+    pts = build._speed_series(None, ctx, 1, 5, SimpleNamespace(fs=0.0, fb=1.0))
+    assert pts is not None
+    assert min(p[1] for p in pts) >= 249         # no braking drop in the line
+    assert max(p[0] for p in pts) < 0.7          # the line ends at his own braking point

@@ -670,3 +670,15 @@ export async function bootPage({ page, load, render }) {
   });
   await go(slug, false);
 }
+
+/** About `count` round tick values between lo and hi (e.g. 260, 280, 300, 320). */
+export function niceTicks(lo, hi, count) {
+  if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return [];
+  const raw = (hi - lo) / Math.max(1, count);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 5, 10].map((m) => m * mag)
+    .reduce((best, st) => (Math.abs(st - raw) < Math.abs(best - raw) ? st : best));
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
+  return out;
+}

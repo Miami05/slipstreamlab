@@ -1,12 +1,12 @@
 // Screen 1: What happened
 import {
   bootPage, el, svgEl, clear, fetchJSON, driverMap, lastName, colorFor, lightenForText,
-  mixWithWhite, colorsClose, kindInfo, confidenceLevel, confidenceWord, safeFileName, isNum,
+  mixWithWhite, colorsClose, kindInfo, confidenceLevel, confidenceWord, safeFileName, isNum, niceTicks,
 } from './common.js';
 
 const W = 600;
 const H = 270;
-const PLOT = { x0: 40, x1: 590, yAxis: 220, yTop: 46, yBot: 206 };
+const PLOT = { x0: 52, x1: 590, yAxis: 220, yTop: 46, yBot: 206 };
 const FONT = 'Inter, system-ui, sans-serif';
 
 /** Draw one moment's chart into `svg` (cleared first). */
@@ -51,6 +51,19 @@ export function drawChart(svg, chart, drivers, ariaText) {
       svg.appendChild(svgEl('text', {
         x: (fits ? zx0 + 8 : Math.min(PLOT.x1, zx1) - 8).toFixed(1), y: 30, fill: '#C9D1DB', 'font-size': 14,
         'font-family': FONT, 'text-anchor': fits ? 'start' : 'end', text: label,
+      }));
+    }
+  }
+
+  // Value ticks + light grid lines, so the numbers in the caption can be read off the chart
+  if (series.length) {
+    for (const t of niceTicks(ymin, ymax, 4)) {
+      const y = yScale(t);
+      if (y < PLOT.yTop - 2 || y > PLOT.yBot + 2) continue;
+      svg.appendChild(svgEl('line', { x1: PLOT.x0, y1: y.toFixed(1), x2: PLOT.x1, y2: y.toFixed(1), stroke: '#262C36' }));
+      svg.appendChild(svgEl('text', {
+        x: PLOT.x0 - 6, y: (y + 4).toFixed(1), fill: '#9AA4B2', 'font-size': 11, 'font-family': FONT,
+        'text-anchor': 'end', text: isLaps ? t.toFixed(1) + ' s' : String(Math.round(t)),
       }));
     }
   }

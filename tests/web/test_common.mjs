@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   hexToRgb, contrastRatio, lightenForText, ordinal, secondsPhrase, rangeText, trafficText,
   finishText, finishKind, pitLabel, gapLabel, formatLapTime, formatDate, safeFileName, interpolatePath,
-  cumulativeDistances, distanceAt, timeAtDistance, gapSeconds, makeGapReader, aheadText, fitPoints, makeOutline,
+  cumulativeDistances, distanceAt, niceTicks, timeAtDistance, gapSeconds, makeGapReader, aheadText, fitPoints, makeOutline,
   chooseRace, pageUrl, dataRoot, kindInfo, confidenceLevel, ovalTrack, validTrack, colorsClose,
 } from '../../web/assets/common.js';
 import { placeCars, SECONDS_TO_FRACTION } from '../../web/assets/whatif.js';
@@ -294,6 +294,13 @@ test('urls keep ?data= and pick the right root', () => {
   assert.equal(dataRoot('?data=sample&race=a'), 'sample-data/');
   assert.equal(dataRoot('?race=a'), 'data/');
   assert.equal(dataRoot(''), 'data/');
+});
+
+test('niceTicks gives round speed and lap-time ticks', () => {
+  assert.deepEqual(niceTicks(262, 331, 4), [280, 300, 320]);
+  assert.deepEqual(niceTicks(94.1, 96.3, 4), [94.5, 95, 95.5, 96]);
+  assert.deepEqual(niceTicks(5, 5, 4), []);
+  assert.deepEqual(niceTicks(NaN, 3, 4), []);
 });
 
 console.log('\n' + n + ' tests passed');

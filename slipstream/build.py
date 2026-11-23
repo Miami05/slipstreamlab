@@ -108,8 +108,19 @@ def _speed_series(rd, ctx, dn, lap, s):
     if m.sum() < 8:
         return None
     x = (tr["frac"][m] - s.fs) / span
+    sp = tr["speed"][m]
+    # Stop each line where THAT driver starts braking (brake on, or throttle clearly lifted after the
+    # fastest point). Otherwise a driver who brakes a little earlier than the field's usual braking
+    # point shows a steep drop that is just braking, and the chart contradicts the caption.
+    brake = np.asarray(tr["brake"])[m] > 0
+    lift = np.asarray(tr["throttle"])[m] < 50
+    peak = int(np.argmax(sp))
+    stop = next((k for k in range(peak + 1, len(sp)) if brake[k] or lift[k]), len(sp))
+    x, sp = x[:stop], sp[:stop]
+    if len(x) < 8:
+        return None
     grid = np.linspace(x.min(), x.max(), 100)
-    y = np.interp(grid, x, tr["speed"][m])
+    y = np.interp(grid, x, sp)
     return [[round(float(a), 4), round(float(b), 1)] for a, b in zip(grid, y)]
 
 
