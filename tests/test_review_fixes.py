@@ -675,10 +675,52 @@ def test_a_blue_flag_lap_is_never_the_reference_car_for_a_lift():
 
 # --- third review round -------------------------------------------------------
 
-def test_red_sentence_never_restarted_vs_restarted():
+def test_red_sentence_uses_the_restart_signal_not_lap_numbers():
     from slipstream import story
-    assert "was not restarted" in story.red_sentence(list(range(40, 51)), total_laps=50)
-    assert "started again later" in story.red_sentence([45, 46], total_laps=71)
+    # a late red flag that WAS restarted must not read "not restarted"
+    assert "started again later" in story.red_sentence([28, 29])
+    assert "was not restarted" in story.red_sentence([], abandoned_lap=30)
+    assert "was not restarted" in story.red_sentence([29, 30], abandoned_lap=29)
+
+
+def test_model_marks_only_a_never_restarted_red_flag_as_abandoned():
+    late_restart = make_rd(n_laps=30, rc_rows=[
+        {"date": iso(T0), "message": "SESSION STARTED", "category": "SessionStatus"},
+        other_msg(28, "RED FLAG - RACE SUSPENDED"),
+        other_msg(29, "SESSION STARTED", category="SessionStatus")])
+    finish_flags(late_restart)
+    assert late_restart.red_abandoned_epoch is None
+    abandoned = make_rd(n_laps=30, rc_rows=[
+        {"date": iso(T0), "message": "SESSION STARTED", "category": "SessionStatus"},
+        other_msg(29, "RED FLAG - RACE SUSPENDED")])
+    finish_flags(abandoned)
+    assert abandoned.red_abandoned_epoch is not None
+
+
+def _pc_dev(deficit_laps, healthy_laps=()):
+    dev = {}
+    for lap in deficit_laps:
+        dev[(1, lap)], dev[(2, lap)] = -20.0, 0.0
+    for lap in healthy_laps:
+        dev[(1, lap)], dev[(2, lap)] = 0.0, 0.0
+    return dev
+
+
+def test_power_cut_still_found_when_the_car_retires():
+    from slipstream import powercut
+    pc = powercut.detect_driver(1, 2, _pc_dev(range(3, 29)), total_laps=60)   # retired after lap 28
+    assert pc is not None and pc.start_lap == 3
+
+
+def test_power_cut_rejects_one_isolated_early_lap_plus_late_spell():
+    from slipstream import powercut
+    assert powercut.detect_driver(1, 2, _pc_dev([10, *range(49, 61)]), total_laps=60) is None
+
+
+def test_power_cut_span_ends_at_last_deficit_lap():
+    from slipstream import powercut
+    # deficit laps 10-19, healthy clean laps at the end: only ~10 laps of deficit, not "most of the race"
+    assert powercut.detect_driver(1, 2, _pc_dev(range(10, 20), healthy_laps=(58, 59, 60)), total_laps=60) is None
 
 
 def test_power_cut_needs_race_lap_span_not_only_clean_laps():

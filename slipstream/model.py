@@ -164,6 +164,7 @@ class RaceData:
     race_start: float
     windows: list = field(default_factory=list)       # (kind, start, end) neutral windows
     yellow_windows: list = field(default_factory=list)
+    red_abandoned_epoch: float | None = None   # red flag with no restart (race not resumed)
     stops: list = field(default_factory=list)
     _tele: dict = field(default_factory=dict)
     _lapkey: dict = field(default_factory=dict)
@@ -476,6 +477,7 @@ def _build_windows(rd: RaceData) -> None:
             rd.windows.append((kind, s, race_end))
     if red is not None:                    # never restarted (race abandoned): until the end
         rd.windows.append(("RED", red, race_end))
+        rd.red_abandoned_epoch = float(red)
 
     open_y: dict = {}
     for _, r in rc[rc.category == "Flag"].iterrows():

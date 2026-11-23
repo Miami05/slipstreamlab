@@ -259,6 +259,17 @@ def pick_compare_lap(rd, a: int, b: int, start: int, last: int) -> int | None:
     return None
 
 
+def _lap_at(rd, dn: int, epoch: float | None) -> int | None:
+    """The driver's lap number that contains `epoch` (the last lap if it is after the finish)."""
+    if epoch is None:
+        return None
+    laps = rd.laps[rd.laps.driver_number == dn].sort_values("lap_number")
+    if laps.empty:
+        return None
+    hit = laps[(laps.t0 <= epoch) & ((laps.t1 > epoch) | laps.t1.isna())]
+    return int(hit.lap_number.iloc[0]) if len(hit) else int(laps.lap_number.iloc[-1])
+
+
 def build(year: int, rnd: int | None = None, latest: bool = False, out_root: Path | None = None,
           log=print, refresh: bool = False) -> dict:
     """Build one race. refresh=True ignores the OpenF1 disk cache for this race (and refills it)."""
@@ -337,6 +348,7 @@ def _build(year, rnd, latest, out_root, log) -> dict:
     head = story.headline(rd.drivers.loc[win_dn, "last_name"], gap, sc_laps, len(moments),
                           vsc_laps=rd.safety_car_laps("VSC"), rain_laps=win_rain, total_laps=rd.total_laps,
                           red_laps=rd.safety_car_laps("RED"),
+                          red_abandoned_lap=_lap_at(rd, win_dn, rd.red_abandoned_epoch),
                           n_low=sum(1 for m in moments if m["confidence"] == "low"))
     date = model.local_date(session)          # the circuit's local date, not the UTC one
     race = {"slug": slug, "name": name, "location": location, "date": date,

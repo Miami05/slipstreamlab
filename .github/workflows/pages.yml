@@ -1,0 +1,76 @@
+# Deploy the website to GitHub Pages.
+#
+# MANUAL ONLY (workflow_dispatch): the site is not shared publicly until the
+# real-world validation (docs/VALIDATION.md) says findings are reliable enough.
+# To use it: repo Settings → Pages → Source: "GitHub Actions", then
+# Actions → "deploy-pages" → Run workflow.
+#
+# Race data is built inside the Action from OpenF1 and published with the site;
+# it is never committed to the repository.
+name: deploy-pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "Season"
+        default: "2026"
+        required: true
+      rounds:
+        description: "Space-separated round numbers to build, or 'latest'"
+        default: "latest"
+        required: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Restore OpenF1 download cache
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: openf1-${{ inputs.year }}-${{ github.run_id }}
+          restore-keys: openf1-${{ inputs.year }}-
+      - name: Build race data
+        env:
+          YEAR: ${{ inputs.year }}
+          ROUNDS: ${{ inputs.rounds }}
+        run: |
+          if [ "$ROUNDS" = "latest" ]; then
+            python -m slipstream build --year "$YEAR" --latest
+          else
+            for r in $ROUNDS; do
+              python -m slipstream build --year "$YEAR" --round "$r"
+            done
+          fi
+      - name: Check findings against validated cases (report only)
+        run: python -m slipstream evaluate || true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

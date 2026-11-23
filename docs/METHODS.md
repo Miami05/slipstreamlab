@@ -172,8 +172,11 @@ while our detector said "battery".
 3. From some lap onward he must be **at least 8 km/h below his teammate on at least 70 % of the
    remaining laps (>= 10 laps)**, the spell must start on such a lap, and his median deviation
    from the field must be at least 4 km/h negative (so a teammate who is just very fast does not
-   count). The spell must also cover **at least half of his shared clean laps**: a deficit that
-   only shows in the last 10 laps is a short problem, not "most of the race". Without intervals
+   count). The spell must also cover **at least half of his shared clean laps**, and, counted in
+   race laps from its first lap to the **last lap that shows the deficit**, at least **half of the
+   distance the pair actually raced** (a car that retires with the problem still counts), with no
+   hole between clean laps longer than a quarter of that distance. So a deficit that only shows in
+   the last 10 laps, or one isolated early lap plus a late spell, is not "most of the race". Without intervals
    data there is no verdict at all (tow laps cannot be left out).
 4. A `battery_low` finding of that driver from that lap on becomes `power_cut` with the label
    "Had less power for most of the race (probably a car problem)"; confidence is `medium` if the

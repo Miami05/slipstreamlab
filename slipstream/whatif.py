@@ -174,7 +174,7 @@ def run(rd: model.RaceData, df=None, fits=None) -> dict:
         if options:
             out[rd.code(dn)] = {"real_pit_lap": int(L), "real_finish": int(results[dn]), "options": options}
     res = {"pit_loss_s": round(float(pit_loss), 1), "drivers": out, "_pit_loss_method": how}
-    if not out and skipped_rain and skipped_rain * 2 >= had_green_stop:
+    if not out and skipped_rain and skipped_rain * 2 > had_green_stop:
         res["unavailable"] = ("The “what if?” is not offered for this race: most first stops were made on or onto "
                               "rain tyres, so their timing depended on the weather, not on how worn the tyres were.")
     return res

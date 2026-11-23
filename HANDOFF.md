@@ -17,7 +17,7 @@ Start with [README.md](README.md), then [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 | Tests | ✅ pytest (no network) + Node tests; CI in `.github/workflows/tests.yml` |
 | Real-world validation | ⚠️ 4 races checked: after fixes 5 of 6 wrong causes removed, 9 of 9 plausible kept. See [docs/VALIDATION.md](docs/VALIDATION.md) |
 | Code review | Fable + Neon (Gemini) + Sol verify — workflow `.claude/workflows/slipstream-review.js`. Three rounds done; the third reviewed everything after `fccb271` (incl. MP4 export) and its 5 findings are fixed. Next review: `{"base": "17abbce"}`. |
-| Hosting | ❌ not deployed yet (local only) |
+| Hosting | ⏸️ ready but switched off on purpose: `.github/workflows/pages.yml` (manual trigger only). See "Deploying" below. |
 
 ## Key decisions (and why)
 - **OpenF1, not FastF1** — FastF1 needs an F1 account login for laps/telemetry in 2026.
@@ -42,6 +42,14 @@ Before pushing: run the review workflow in Claude Code
 (`Workflow scriptPath=.claude/workflows/slipstream-review.js`, args `{"base": "<last reviewed commit>"}`).
 It needs the `fable-reviewer` and `gemini-reviewer` agents in `~/.claude/agents/`
 and the Antigravity CLI (`agy`) logged in.
+
+## Deploying (when validation says it's ready)
+1. GitHub → repo **Settings → Pages → Source: GitHub Actions**.
+2. **Actions → deploy-pages → Run workflow** (year `2026`, rounds `latest` or e.g. `18 19 20 21`).
+   It builds the race data inside the Action (never committed) and publishes `web/`.
+3. Site URL: `https://miami05.github.io/slipstreamlab/`.
+Not done yet on purpose: 6 of 15 checkable findings were wrong before the fixes and the fixes
+are only proven on the same 4 races.
 
 ## Known limitations
 - Engine power cuts (Gasly, Las Vegas) can't be told apart from battery limits in public data.

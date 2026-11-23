@@ -80,20 +80,22 @@ def rain_sentence(rain_laps: list[int], total_laps: int) -> str:
     return (f"Rain came and went, on {_when_all(runs)}, so we left those laps out of the tyre and power readings.")
 
 
-def red_sentence(red_laps: list[int], total_laps: int | None = None) -> str:
+def red_sentence(red_laps: list[int], abandoned_lap: int | None = None) -> str:
+    """abandoned_lap: set only when race control never restarted the race (known from the data)."""
+    if abandoned_lap:
+        return f"The race was stopped with a red flag on lap {abandoned_lap} and was not restarted."
     runs = lap_runs(red_laps or [])
     if not runs:
         return ""
     if len(runs) == 1:
-        if total_laps and runs[0][1] >= total_laps - 1:   # red window ran to the end: never restarted
-            return f"The race was stopped with a red flag on lap {runs[0][0]} and was not restarted."
         return f"The race was stopped with a red flag on lap {runs[0][0]} and started again later."
     return f"The race was stopped with a red flag more than once, on {_when_all(runs)}."
 
 
 def headline(winner: str, gap_s: float | None, sc_laps: list[int], n_moments: int,
              vsc_laps: list[int] | None = None, rain_laps: list[int] | None = None,
-             total_laps: int = 0, red_laps: list[int] | None = None, n_low: int = 0) -> dict:
+             total_laps: int = 0, red_laps: list[int] | None = None, n_low: int = 0,
+             red_abandoned_lap: int | None = None) -> dict:
     """n_moments = all moments shown, n_low = how many of them are low confidence (hedged apart)."""
     if gap_s is None or gap_s <= 0:
         title = f"{winner} won the race."
@@ -129,7 +131,7 @@ def headline(winner: str, gap_s: float | None, sc_laps: list[int], n_moments: in
             found += (", plus one less certain one." if n_low == 1 else f", plus {n_low} less certain ones.")
         else:
             found += "."
-    red = red_sentence(red_laps or [], total_laps)
+    red = red_sentence(red_laps or [], red_abandoned_lap)
     parts = [x for x in (sc, red, rain_sentence(rain_laps or [], total_laps), vsc, found) if x]
     if len(parts) > (4 if red else 3) and vsc:
         parts.remove(vsc)            # at most 3 sentences (4 with a red flag): the short slow spell matters least
