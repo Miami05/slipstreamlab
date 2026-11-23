@@ -54,12 +54,15 @@ jobs:
         run: |
           set -euf                       # -f: no glob expansion of the user's input
           [[ "$YEAR" =~ ^[0-9]{4}$ ]] || { echo "bad year: $YEAR"; exit 1; }
-          for r in $ROUNDS; do
+          read -ra rounds <<< "$ROUNDS"
+          (( ${#rounds[@]} > 0 )) || { echo "no rounds given"; exit 1; }
+          for r in "${rounds[@]}"; do
             [[ "$r" =~ ^[0-9]{1,2}$ ]] || { echo "bad round: $r"; exit 1; }
           done
-          for r in $ROUNDS; do
+          for r in "${rounds[@]}"; do
             python -m slipstream build --year "$YEAR" --round "$r"
           done
+          [ -f web/data/index.json ] || { echo "nothing was built - not deploying"; exit 1; }
       - name: Check findings against validated cases (report only)
         run: python -m slipstream evaluate || true
       - uses: actions/upload-pages-artifact@v3

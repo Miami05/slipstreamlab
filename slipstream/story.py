@@ -84,7 +84,7 @@ def red_sentence(red_laps: list[int], abandoned_lap: int | None = None) -> str:
     """abandoned_lap: set only when race control never restarted the race (known from the data)."""
     runs = lap_runs(red_laps or [])
     if abandoned_lap:
-        earlier = [r for r in runs if r[1] < abandoned_lap]
+        earlier = [(a, min(b, abandoned_lap - 1)) for a, b in runs if a < abandoned_lap]
         if earlier:
             return (f"The race was stopped with a red flag more than once, on {_when_all(earlier)}, "
                     f"and again on lap {abandoned_lap}, after which it was not restarted.")

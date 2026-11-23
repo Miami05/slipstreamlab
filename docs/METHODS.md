@@ -175,9 +175,11 @@ while our detector said "battery".
    count). The spell must also cover **at least half of his shared clean laps**, and from its
    first to its last **deficit** lap at least **half of the laps he actually raced** (taken from the
    lap table, so a car that retires with the problem counts and a teammate who finishes doesn't
-   stretch it). The biggest hole between deficit laps (safety car, red flag, traffic) needs at
-   least 3 deficit laps on each side. So a deficit that only shows in the last 10 laps, or one
-   isolated early lap plus a late spell, is not "most of the race". Without intervals
+   stretch it). Short holes between deficit laps (up to 5 laps or 10 % of the race: traffic, a
+   pit stop, one healthy lap) are normal; no hole may be longer than 35 % of the race (enough for
+   a safety car or red flag), and every longer hole needs at least 3 deficit laps on each side.
+   So a deficit that only shows in the last 10 laps, or a few early laps plus a late spell, is not
+   "most of the race". Without intervals
    data there is no verdict at all (tow laps cannot be left out).
 4. A `battery_low` finding of that driver from that lap on becomes `power_cut` with the label
    "Had less power for most of the race (probably a car problem)"; confidence is `medium` if the

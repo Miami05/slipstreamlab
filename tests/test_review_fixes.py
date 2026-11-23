@@ -765,3 +765,36 @@ def test_evaluate_strict_fails_when_races_missing(tmp_path, monkeypatch):
     code = evaluate.run(strict=True, log=out.append)
     assert code == 1
     assert any("NOT VALIDATED" in line for line in out)
+
+
+# Every power-cut span case raised in review rounds 3-6, in one table, so no patch can reopen one.
+POWER_CUT_SPAN_CASES = [
+    # (deficit laps, race_len, expected)
+    (list(range(3, 58)) + [59, 60], 60, True),          # one missing lap near the end is normal
+    ([3] + list(range(5, 61)), 60, True),               # one missing lap near the start is normal
+    (list(range(3, 22)) + list(range(38, 61)), 60, True),  # long SC/red-flag hole, deficit both sides
+    (list(range(3, 29)), 28, True),                     # car retired on lap 28 with the problem
+    ([5, 6, 7] + list(range(49, 61)), 60, False),       # 3 early laps + late spell: hole too long
+    ([10] + list(range(49, 61)), 60, False),            # one isolated early lap + late spell
+    ([5] + [20, 21, 22] + list(range(40, 61)), 60, False),  # isolated lap 5 behind a real hole
+    (list(range(14, 30)), 60, False),                   # 16 laps of a 60-lap race
+    (list(range(10, 20)), 60, False),                   # deficit only laps 10-19
+    (list(range(49, 61)), 60, False),                   # only the last 12 laps
+]
+
+
+@pytest.mark.parametrize("deficit, race_len, expected", POWER_CUT_SPAN_CASES)
+def test_power_cut_span_cases(deficit, race_len, expected):
+    from slipstream import powercut
+    assert powercut._spans_most_of_race(deficit, race_len) is expected
+
+
+def test_power_cut_start_lap_skips_an_isolated_early_lap():
+    from slipstream import powercut
+    pc = powercut.detect_driver(1, 2, _pc_dev([5, 20, 21, 22, *range(40, 61)]), total_laps=60, last_lap=60)
+    assert pc is not None and pc.start_lap == 20
+
+
+def test_red_sentence_keeps_a_merged_earlier_stoppage():
+    two = story.red_sentence([39, 40, 41], abandoned_lap=40)
+    assert "more than once" in two and "39" in two and "lap 40" in two

@@ -14,8 +14,9 @@ TEAMMATE's (same lap, so wind and track state cancel) and with the field's media
   the remaining laps (>= 10 laps), and his median must also be clearly below the field's;
 * that spell must cover at least half of the driver's shared clean laps AND, from its first to its
   last deficit lap, at least half of the laps the DRIVER raced (from the lap table, so a car that
-  retires with the problem counts); the biggest hole between deficit laps needs >= 3 deficit laps
-  on each side, so one early lap plus a late spell is not "most of the race";
+  retires with the problem counts); short holes (<= 5 laps / 10 %) are normal, no hole may exceed
+  35 % of the race, and every longer hole needs >= 3 deficit laps on each side, so a few early laps
+  plus a late spell are not "most of the race";
 * without intervals data traffic cannot be filtered, so there is no verdict at all.
 
 Any `battery_low` finding of that driver from that lap on is then relabelled `power_cut`.
@@ -72,7 +73,9 @@ def lap_deviation(feats: dict, straights) -> dict[tuple[int, int], float]:
     return {k: float(np.mean(v)) for k, v in per.items() if len(v) >= MIN_STRAIGHTS}
 
 
-MIN_SIDE_LAPS = 3   # deficit laps needed on each side of the biggest hole (stops "1 early lap + late spell")
+MIN_SIDE_LAPS = 3      # deficit laps needed on each side of every real hole (stops "1 early lap + late spell")
+MAX_HOLE_SHARE = 0.35  # no hole between deficit laps longer than this share of the race (SC/red flag fit)
+SMALL_GAP_SHARE = 0.10 # holes up to max(5 laps, this share) are normal (traffic, pit, one healthy lap)
 
 
 def _spans_most_of_race(deficit_laps: list[int], race_len: int) -> bool:
@@ -80,20 +83,26 @@ def _spans_most_of_race(deficit_laps: list[int], race_len: int) -> bool:
 
     * first to last deficit lap >= MIN_COVERAGE of race_len (the driver's own laps raced: a car that
       retires with the problem counts, a teammate who finishes does not stretch it);
-    * the biggest hole between deficit laps (safety car, red flag, traffic, missing data) needs at
-      least MIN_SIDE_LAPS deficit laps on each side, so one isolated lap can't bridge to a late spell.
+    * holes up to max(5, SMALL_GAP_SHARE * race_len) laps are normal (traffic, pit stop, one lap);
+    * no hole may be longer than MAX_HOLE_SHARE * race_len (room for a safety car or red flag);
+    * EVERY real hole needs >= MIN_SIDE_LAPS deficit laps on each side, so a few isolated laps can't
+      bridge to a late spell.
+    The cases that shaped this rule are in tests/test_review_fixes.py (POWER_CUT_SPAN_CASES).
     """
-    if not deficit_laps or not race_len:
+    if len(deficit_laps) < 2 or not race_len:
         return False
     if deficit_laps[-1] - deficit_laps[0] + 1 < MIN_COVERAGE * race_len:
         return False
-    if len(deficit_laps) < 2:
-        return False
     gaps = np.diff(deficit_laps)
-    k = int(np.argmax(gaps))
-    if gaps[k] <= 1:
-        return True
-    return (k + 1) >= MIN_SIDE_LAPS and (len(deficit_laps) - k - 1) >= MIN_SIDE_LAPS
+    small = max(5, SMALL_GAP_SHARE * race_len)
+    for k, g in enumerate(gaps):
+        if g <= small:
+            continue
+        if g > MAX_HOLE_SHARE * race_len:
+            return False
+        if (k + 1) < MIN_SIDE_LAPS or (len(deficit_laps) - k - 1) < MIN_SIDE_LAPS:
+            return False
+    return True
 
 
 def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: int | None = None,
