@@ -780,6 +780,9 @@ POWER_CUT_SPAN_CASES = [
     (list(range(14, 30)), 60, False),                   # 16 laps of a 60-lap race
     (list(range(10, 20)), 60, False),                   # deficit only laps 10-19
     (list(range(49, 61)), 60, False),                   # only the last 12 laps
+    (list(range(3, 51)) + [58, 59], 60, True),          # 2 straggler laps after a late hole: noise
+    ([5, 6, 7, 28] + list(range(49, 61)), 60, False),   # one noisy lap can't bridge a huge hole
+    (list(range(3, 44)) + [49, 50], 50, True),          # exactly 5 missing laps is a normal hole
 ]
 
 
@@ -787,6 +790,12 @@ POWER_CUT_SPAN_CASES = [
 def test_power_cut_span_cases(deficit, race_len, expected):
     from slipstream import powercut
     assert powercut._spans_most_of_race(deficit, race_len) is expected
+
+
+def test_power_cut_retirement_with_a_safety_car_hole():
+    from slipstream import powercut
+    # retired on lap 28 of 60; a 10-lap SC hole is normal relative to the FULL race distance
+    assert powercut._spans_most_of_race([*range(3, 11), *range(21, 29)], 28, total_laps=60) is True
 
 
 def test_power_cut_start_lap_skips_an_isolated_early_lap():

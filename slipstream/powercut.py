@@ -14,9 +14,9 @@ TEAMMATE's (same lap, so wind and track state cancel) and with the field's media
   the remaining laps (>= 10 laps), and his median must also be clearly below the field's;
 * that spell must cover at least half of the driver's shared clean laps AND, from its first to its
   last deficit lap, at least half of the laps the DRIVER raced (from the lap table, so a car that
-  retires with the problem counts); short holes (<= 5 laps / 10 %) are normal, no hole may exceed
-  35 % of the race, and every longer hole needs >= 3 deficit laps on each side, so a few early laps
-  plus a late spell are not "most of the race";
+  retires with the problem counts). Deficit laps are split into segments at holes of more than
+  5 laps / 10 % of the race; segments under 3 laps are noise (and the spell may not start on one);
+  between the rest no more than 35 % of the full race may be missing;
 * without intervals data traffic cannot be filtered, so there is no verdict at all.
 
 Any `battery_low` finding of that driver from that lap on is then relabelled `power_cut`.
@@ -78,31 +78,38 @@ MAX_HOLE_SHARE = 0.35  # no hole between deficit laps longer than this share of 
 SMALL_GAP_SHARE = 0.10 # holes up to max(5 laps, this share) are normal (traffic, pit, one healthy lap)
 
 
-def _spans_most_of_race(deficit_laps: list[int], race_len: int) -> bool:
+def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int | None = None) -> bool:
     """The deficit (measured on the laps that show it) covers most of the distance the driver raced.
 
-    * first to last deficit lap >= MIN_COVERAGE of race_len (the driver's own laps raced: a car that
-      retires with the problem counts, a teammate who finishes does not stretch it);
-    * holes up to max(5, SMALL_GAP_SHARE * race_len) laps are normal (traffic, pit stop, one lap);
-    * no hole may be longer than MAX_HOLE_SHARE * race_len (room for a safety car or red flag);
-    * EVERY real hole needs >= MIN_SIDE_LAPS deficit laps on each side, so a few isolated laps can't
-      bridge to a late spell.
-    The cases that shaped this rule are in tests/test_review_fixes.py (POWER_CUT_SPAN_CASES).
+    1. Split the deficit laps into segments wherever more than max(5, 10 % of the race) laps are
+       missing (traffic, a pit stop or one healthy lap are normal and don't split).
+    2. Segments shorter than MIN_SIDE_LAPS are noise and are dropped, except that the spell may not
+       START on one (so a few isolated early laps can't pull the start forward).
+    3. Between the remaining segments no more than MAX_HOLE_SHARE of the race may be missing
+       (room for a safety car or red flag); the race here is the full distance, so a car that
+       retires is not penalised for a normal safety car.
+    4. First to last remaining deficit lap covers >= MIN_COVERAGE of race_len, the laps the DRIVER
+       raced (a car that retires with the problem counts).
+    All review cases that shaped this rule: tests/test_review_fixes.py, POWER_CUT_SPAN_CASES.
     """
     if len(deficit_laps) < 2 or not race_len:
         return False
-    if deficit_laps[-1] - deficit_laps[0] + 1 < MIN_COVERAGE * race_len:
-        return False
-    gaps = np.diff(deficit_laps)
-    small = max(5, SMALL_GAP_SHARE * race_len)
-    for k, g in enumerate(gaps):
-        if g <= small:
-            continue
-        if g > MAX_HOLE_SHARE * race_len:
+    distance = total_laps or race_len
+    small = max(5, SMALL_GAP_SHARE * distance)
+    segments, cur = [], [deficit_laps[0]]
+    for prev, lap in zip(deficit_laps, deficit_laps[1:]):
+        if lap - prev - 1 > small:          # laps missing in between
+            segments.append(cur)
+            cur = []
+        cur.append(lap)
+    segments.append(cur)
+    if len(segments[0]) < MIN_SIDE_LAPS:
+        return False                        # the spell must not start on noise
+    kept = [seg for seg in segments if len(seg) >= MIN_SIDE_LAPS]
+    for left, right in zip(kept, kept[1:]):
+        if right[0] - left[-1] - 1 > MAX_HOLE_SHARE * distance:
             return False
-        if (k + 1) < MIN_SIDE_LAPS or (len(deficit_laps) - k - 1) < MIN_SIDE_LAPS:
-            return False
-    return True
+    return kept[-1][-1] - kept[0][0] + 1 >= MIN_COVERAGE * race_len
 
 
 def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: int | None = None,
@@ -122,7 +129,7 @@ def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: i
     for i in range(0, len(laps) - need + 1):
         if not low[i]:
             continue                        # the spell starts on a lap that shows the deficit
-        if race_len and not _spans_most_of_race([l for l, b in zip(laps[i:], low[i:]) if b], race_len):
+        if race_len and not _spans_most_of_race([l for l, b in zip(laps[i:], low[i:]) if b], race_len, total_laps):
             continue                        # "most of the race" must hold in race laps, not just clean laps
         if low[i:].mean() >= MIN_SHARE and float(np.median(mine[i:])) <= -MIN_FIELD_DROP_KMH:
             return PowerCut(dn, mate, int(laps[i]), len(laps) - i, float(low[i:].mean()),

@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euf                       # -f: no glob expansion of the user's input
           [[ "$YEAR" =~ ^[0-9]{4}$ ]] || { echo "bad year: $YEAR"; exit 1; }
-          read -ra rounds <<< "$ROUNDS"
+          rounds=($ROUNDS)               # split on any whitespace incl. newlines (globbing is off: set -f)
           (( ${#rounds[@]} > 0 )) || { echo "no rounds given"; exit 1; }
           for r in "${rounds[@]}"; do
             [[ "$r" =~ ^[0-9]{1,2}$ ]] || { echo "bad round: $r"; exit 1; }
