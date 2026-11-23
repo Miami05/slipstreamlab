@@ -302,7 +302,9 @@ def _build(year, rnd, latest, out_root, log) -> dict:
     for pc in cuts.values():
         notes.append(f"{rd.code(pc.driver)}: slower than his teammate by {abs(pc.vs_mate):.0f} km/h on "
                      f"{pc.share:.0%} of clean laps from lap {pc.start_lap} (power loss)")
-    if rd.traffic is None:
+    if not powercut.ENABLED:
+        notes.append("power-loss check is switched off (powercut.ENABLED = False)")
+    elif rd.traffic is None:
         notes.append("no intervals data: sustained power loss cannot be judged (tow laps cannot be left out)")
     elif not cuts:
         notes.append("no sustained power loss (against the teammate) found for any driver")

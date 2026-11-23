@@ -44,8 +44,13 @@ Wolff interview, PlanetF1, The Race/Pitpass via Gemini Hydrogen research).
 is only one possible cause. Engine-temperature power reduction looks the same
 in speed/throttle data. Changes made:
 - Wording: "lost power — possibly the battery" instead of "battery ran low".
-- A loss that repeats on most laps of the race (like Gasly's) is more likely a
-  car problem than tactical battery use → lower confidence and say so.
+- Battery causes are capped at medium confidence.
+- A "probably a car problem" detector (`power_cut`) was built and then **switched off**
+  (2026-11-23, `slipstream/powercut.py`, `ENABLED = False`): it never fired on a real race, review
+  rounds kept finding cases where scattered laps could produce a false claim, and Gasly's power cut
+  is not visible in the public data (his top speed was normal). **Gasly Las Vegas stays a known
+  wrong cause** — `evaluate` reports it as FAIL (5 of 6 wrong cases fixed). Turn the detector back
+  on only after a real race shows a clear, confirmed case and the rule is re-checked on it.
 
 ### 2026 United States GP (round 18) — checked 2026-11-22
 
@@ -90,7 +95,7 @@ in speed/throttle data. Changes made:
 | Rain read as tyre wear | Gasly, Albon (Brazil) | Use OpenF1 `weather` rainfall; exclude wet laps |
 | Traffic read as tyres/energy | Russell (USA), Perez (USA, blue flags) | Gap to car ahead (`intervals`), blue-flag messages |
 | Cooling read as energy saving | Hülkenberg (Mexico) | Label "Lifted off early (saving energy or cooling the car)" |
-| Engine power cut read as battery | Gasly (Las Vegas) | Sustained top-speed deficit vs teammate → "probably a car problem" |
+| Engine power cut read as battery | Gasly (Las Vegas) | **Not fixed.** Detector built, then switched off (not visible in public data; see above) |
 
 By type: "Lost power (maybe battery)" was the most reliable (1 wrong of 7);
 tyre wear the least (3 wrong of 9). These 19 cases are stored in
