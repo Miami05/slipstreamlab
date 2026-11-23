@@ -17,8 +17,8 @@ on:
         default: "2026"
         required: true
       rounds:
-        description: "Space-separated round numbers to build, or 'latest'"
-        default: "latest"
+        description: "Rounds to build, e.g. '18 19 20 21'. EVERY RUN REPLACES THE WHOLE SITE: list every race you want online."
+        default: "18 19 20 21"
         required: true
 
 permissions:
@@ -52,13 +52,14 @@ jobs:
           YEAR: ${{ inputs.year }}
           ROUNDS: ${{ inputs.rounds }}
         run: |
-          if [ "$ROUNDS" = "latest" ]; then
-            python -m slipstream build --year "$YEAR" --latest
-          else
-            for r in $ROUNDS; do
-              python -m slipstream build --year "$YEAR" --round "$r"
-            done
-          fi
+          set -euf                       # -f: no glob expansion of the user's input
+          [[ "$YEAR" =~ ^[0-9]{4}$ ]] || { echo "bad year: $YEAR"; exit 1; }
+          for r in $ROUNDS; do
+            [[ "$r" =~ ^[0-9]{1,2}$ ]] || { echo "bad round: $r"; exit 1; }
+          done
+          for r in $ROUNDS; do
+            python -m slipstream build --year "$YEAR" --round "$r"
+          done
       - name: Check findings against validated cases (report only)
         run: python -m slipstream evaluate || true
       - uses: actions/upload-pages-artifact@v3

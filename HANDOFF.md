@@ -45,7 +45,8 @@ and the Antigravity CLI (`agy`) logged in.
 
 ## Deploying (when validation says it's ready)
 1. GitHub → repo **Settings → Pages → Source: GitHub Actions**.
-2. **Actions → deploy-pages → Run workflow** (year `2026`, rounds `latest` or e.g. `18 19 20 21`).
+2. **Actions → deploy-pages → Run workflow** (year `2026`, rounds e.g. `11 18 19 20 21`).
+   **Every run replaces the whole site** — list every race you want online.
    It builds the race data inside the Action (never committed) and publishes `web/`.
 3. Site URL: `https://miami05.github.io/slipstreamlab/`.
 Not done yet on purpose: 6 of 15 checkable findings were wrong before the fixes and the fixes

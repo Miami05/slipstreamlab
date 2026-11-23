@@ -266,8 +266,8 @@ def _lap_at(rd, dn: int, epoch: float | None) -> int | None:
     laps = rd.laps[rd.laps.driver_number == dn].sort_values("lap_number")
     if laps.empty:
         return None
-    hit = laps[(laps.t0 <= epoch) & ((laps.t1 > epoch) | laps.t1.isna())]
-    return int(hit.lap_number.iloc[0]) if len(hit) else int(laps.lap_number.iloc[-1])
+    started = laps[laps.t0 <= epoch]
+    return int(started.lap_number.iloc[-1]) if len(started) else int(laps.lap_number.iloc[0])
 
 
 def build(year: int, rnd: int | None = None, latest: bool = False, out_root: Path | None = None,

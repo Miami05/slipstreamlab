@@ -12,11 +12,10 @@ TEAMMATE's (same lap, so wind and track state cancel) and with the field's media
   be judged);
 * from some lap onward the driver must be at least 8 km/h below his teammate on at least 70 % of
   the remaining laps (>= 10 laps), and his median must also be clearly below the field's;
-* that spell must cover at least half of the driver's shared clean laps AND, in race laps, at least
-  half of the distance the pair actually raced (to the last lap that shows the deficit; a car that
-  retires still counts), with no hole between clean laps longer than a quarter of that distance:
-  a deficit that only shows in the last 10 laps, or one early lap plus a late spell, is not
-  "most of the race";
+* that spell must cover at least half of the driver's shared clean laps AND, from its first to its
+  last deficit lap, at least half of the laps the DRIVER raced (from the lap table, so a car that
+  retires with the problem counts); the biggest hole between deficit laps needs >= 3 deficit laps
+  on each side, so one early lap plus a late spell is not "most of the race";
 * without intervals data traffic cannot be filtered, so there is no verdict at all.
 
 Any `battery_low` finding of that driver from that lap on is then relabelled `power_cut`.
@@ -73,32 +72,40 @@ def lap_deviation(feats: dict, straights) -> dict[tuple[int, int], float]:
     return {k: float(np.mean(v)) for k, v in per.items() if len(v) >= MIN_STRAIGHTS}
 
 
-MAX_GAP_SHARE = 0.25   # clean laps inside the spell may not leave a hole longer than this share of the race
+MIN_SIDE_LAPS = 3   # deficit laps needed on each side of the biggest hole (stops "1 early lap + late spell")
 
 
-def _spans_most_of_race(laps: list[int], low: np.ndarray, race_len: int) -> bool:
-    """From laps[0] to the last lap that shows the deficit: covers >= MIN_COVERAGE of the laps raced,
-    and the clean laps in between are spread out (no gap > MAX_GAP_SHARE of the race)."""
-    if not low.any() or not race_len:
+def _spans_most_of_race(deficit_laps: list[int], race_len: int) -> bool:
+    """The deficit (measured on the laps that show it) covers most of the distance the driver raced.
+
+    * first to last deficit lap >= MIN_COVERAGE of race_len (the driver's own laps raced: a car that
+      retires with the problem counts, a teammate who finishes does not stretch it);
+    * the biggest hole between deficit laps (safety car, red flag, traffic, missing data) needs at
+      least MIN_SIDE_LAPS deficit laps on each side, so one isolated lap can't bridge to a late spell.
+    """
+    if not deficit_laps or not race_len:
         return False
-    last = int(np.flatnonzero(low)[-1])
-    span_laps = laps[: last + 1]
-    if span_laps[-1] - span_laps[0] + 1 < MIN_COVERAGE * race_len:
+    if deficit_laps[-1] - deficit_laps[0] + 1 < MIN_COVERAGE * race_len:
         return False
-    gaps = np.diff(span_laps) if len(span_laps) > 1 else np.array([0])
-    return int(gaps.max()) <= MAX_GAP_SHARE * race_len
+    if len(deficit_laps) < 2:
+        return False
+    gaps = np.diff(deficit_laps)
+    k = int(np.argmax(gaps))
+    if gaps[k] <= 1:
+        return True
+    return (k + 1) >= MIN_SIDE_LAPS and (len(deficit_laps) - k - 1) >= MIN_SIDE_LAPS
 
 
-def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: int | None = None) -> PowerCut | None:
+def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: int | None = None,
+                  last_lap: int | None = None) -> PowerCut | None:
+    """last_lap: the driver's real last completed lap (from the lap table, not from `dev`)."""
     # Clean air only: a car in a tow is faster in a straight line, so a pair where one car follows
     # and the other does not would show a deficit that is only the tow. Too few clean laps = no verdict.
     laps = sorted(l for (d, l) in dev if d == dn and (mate, l) in dev
                   and (dn, l) not in skip and (mate, l) not in skip)
     if len(laps) < MIN_LAPS:
         return None
-    # The distance this pair actually raced (a car that retires with an engine problem must still count).
-    raced = [l for (d, l) in dev if d in (dn, mate)]
-    race_len = min(total_laps, max(raced)) if (total_laps and raced) else total_laps
+    race_len = min(x for x in (total_laps, last_lap) if x) if (total_laps or last_lap) else None
     mine = np.array([dev[(dn, l)] for l in laps])
     diff = mine - np.array([dev[(mate, l)] for l in laps])
     low = diff <= -MIN_DROP_KMH
@@ -106,7 +113,7 @@ def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: i
     for i in range(0, len(laps) - need + 1):
         if not low[i]:
             continue                        # the spell starts on a lap that shows the deficit
-        if total_laps and not _spans_most_of_race(laps[i:], low[i:], race_len):
+        if race_len and not _spans_most_of_race([l for l, b in zip(laps[i:], low[i:]) if b], race_len):
             continue                        # "most of the race" must hold in race laps, not just clean laps
         if low[i:].mean() >= MIN_SHARE and float(np.median(mine[i:])) <= -MIN_FIELD_DROP_KMH:
             return PowerCut(dn, mate, int(laps[i]), len(laps) - i, float(low[i:].mean()),
@@ -114,13 +121,14 @@ def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: i
     return None
 
 
-def detect(dev: dict, mates: dict[int, int | None], skip=frozenset(), total_laps: int | None = None) -> dict[int, PowerCut]:
+def detect(dev: dict, mates: dict[int, int | None], skip=frozenset(), total_laps: int | None = None,
+           last_laps: dict[int, int] | None = None) -> dict[int, PowerCut]:
     out = {}
     for dn in sorted({d for d, _ in dev}):
         mate = mates.get(dn)
         if mate is None:
             continue
-        pc = detect_driver(dn, mate, dev, skip, total_laps)
+        pc = detect_driver(dn, mate, dev, skip, total_laps, (last_laps or {}).get(dn))
         if pc:
             out[dn] = pc
     return out
@@ -137,7 +145,8 @@ def apply(rd, findings: list, ctx: dict, traffic: dict | None = None) -> dict[in
     dev = lap_deviation(ctx["feats"], ctx["straights"])
     skip = {k for k, v in traffic.items() if v >= 0.5}
     mates = {int(d): rd.teammate(int(d)) for d in rd.drivers.index}
-    cuts = detect(dev, mates, skip, getattr(rd, "total_laps", None))
+    last_laps = {int(d): int(g.lap_number.max()) for d, g in rd.laps.groupby("driver_number")}
+    cuts = detect(dev, mates, skip, getattr(rd, "total_laps", None), last_laps)
     ctx["power_cuts"] = cuts
     order = {"low": 0, "medium": 1, "high": 2}
     for f in findings:

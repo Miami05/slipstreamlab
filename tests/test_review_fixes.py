@@ -681,6 +681,8 @@ def test_red_sentence_uses_the_restart_signal_not_lap_numbers():
     assert "started again later" in story.red_sentence([28, 29])
     assert "was not restarted" in story.red_sentence([], abandoned_lap=30)
     assert "was not restarted" in story.red_sentence([29, 30], abandoned_lap=29)
+    two = story.red_sentence([12, 13, 40, 41], abandoned_lap=40)
+    assert "more than once" in two and "12" in two and "lap 40" in two and "not restarted" in two
 
 
 def test_model_marks_only_a_never_restarted_red_flag_as_abandoned():
@@ -706,10 +708,32 @@ def _pc_dev(deficit_laps, healthy_laps=()):
     return dev
 
 
-def test_power_cut_still_found_when_the_car_retires():
+def test_power_cut_still_found_when_the_car_retires_and_teammate_finishes():
     from slipstream import powercut
-    pc = powercut.detect_driver(1, 2, _pc_dev(range(3, 29)), total_laps=60)   # retired after lap 28
+    dev = _pc_dev(range(3, 29))                       # driver 1 retires after lap 28 ...
+    for lap in range(29, 61):
+        dev[(2, lap)] = 0.0                           # ... teammate 2 races on to lap 60
+    pc = powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=28)
     assert pc is not None and pc.start_lap == 3
+
+
+def test_power_cut_race_length_comes_from_laps_raced_not_feature_laps():
+    from slipstream import powercut
+    # healthy 3-13, deficit 14-29, features stop after lap 29 but the car raced all 60 laps
+    dev = _pc_dev(range(14, 30), healthy_laps=range(3, 14))
+    assert powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=60) is None
+
+
+def test_power_cut_survives_one_long_hole_with_deficit_on_both_sides():
+    from slipstream import powercut
+    dev = _pc_dev([*range(3, 22), *range(38, 61)])    # long SC/red flag/traffic gap 22-37
+    assert powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=60) is not None
+
+
+def test_power_cut_healthy_laps_cannot_bridge_an_isolated_early_lap():
+    from slipstream import powercut
+    dev = _pc_dev([10, *range(49, 61)], healthy_laps=range(20, 49, 4))
+    assert powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=60) is None
 
 
 def test_power_cut_rejects_one_isolated_early_lap_plus_late_spell():
