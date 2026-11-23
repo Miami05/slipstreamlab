@@ -80,6 +80,10 @@ SMALL_GAP_SHARE = 0.10 # holes up to max(5 laps, this share) are normal (traffic
 
 
 def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int | None = None) -> bool:
+    return _qualifying_end(deficit_laps, race_len, total_laps) is not None
+
+
+def _qualifying_end(deficit_laps: list[int], race_len: int, total_laps: int | None = None) -> int | None:
     """The deficit (measured on the laps that show it) covers most of the distance the driver raced.
 
     1. Split the deficit laps into segments wherever more than max(5, 10 % of the race) laps are
@@ -87,7 +91,8 @@ def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int 
     2. The spell may not START on a segment shorter than MIN_SIDE_LAPS. Short segments never bridge
        a hole: their laps count as missing (principle: when in doubt, don't claim a car problem -
        a missed power cut leaves the finding as "maybe battery", a false one states something wrong).
-    3. Walk the long segments from the start, adding up the laps missing between them. Answer yes
+    3. Walk the long segments from the start, adding up every missing lap (between AND inside
+       segments). Answer yes
        at the FIRST point where first..current covers >= MIN_COVERAGE of race_len (the laps the
        DRIVER raced, so a car that retires with the problem counts) while no more than
        min(MAX_HOLE_SHARE of the full race, (1 - MIN_COVERAGE) of race_len) laps are missing.
@@ -106,22 +111,29 @@ def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int 
         cur.append(lap)
     segments.append(cur)
     if len(segments[0]) < MIN_SIDE_LAPS:
-        return False                        # the spell must not start on noise
+        return None                         # the spell must not start on noise
     need = MIN_COVERAGE * race_len
     max_missing = min(MAX_HOLE_SHARE * distance, (1 - MIN_COVERAGE) * race_len)
-    start, end, missing = segments[0][0], segments[0][-1], 0
+
+    def inside(seg):                        # laps missing INSIDE a segment count too
+        return sum(b - a - 1 for a, b in zip(seg, seg[1:]))
+
+    start, end = segments[0][0], segments[0][-1]
+    missing = inside(segments[0])
+    if missing > max_missing:
+        return None
     if end - start + 1 >= need:
-        return True
+        return end
     for seg in segments[1:]:
         if len(seg) < MIN_SIDE_LAPS:
             continue                        # short segments never bridge: their laps count as missing
-        missing += seg[0] - end - 1
+        missing += (seg[0] - end - 1) + inside(seg)
         if missing > max_missing:
-            return False
+            return None
         end = seg[-1]
         if end - start + 1 >= need:
-            return True                     # first point where most of the race is covered: more laps can't undo it
-    return False
+            return end                      # first point where most of the race is covered: more laps can't undo it
+    return None
 
 
 def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: int | None = None,
@@ -141,11 +153,17 @@ def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: i
     for i in range(0, len(laps) - need + 1):
         if not low[i]:
             continue                        # the spell starts on a lap that shows the deficit
-        if race_len and not _spans_most_of_race([l for l, b in zip(laps[i:], low[i:]) if b], race_len, total_laps):
-            continue                        # "most of the race" must hold in race laps, not just clean laps
-        if low[i:].mean() >= MIN_SHARE and float(np.median(mine[i:])) <= -MIN_FIELD_DROP_KMH:
-            return PowerCut(dn, mate, int(laps[i]), len(laps) - i, float(low[i:].mean()),
-                            float(np.median(diff[i:])), float(np.median(mine[i:])))
+        j = len(laps)                       # evidence = clean laps up to where the span rule is met
+        if race_len:
+            end = _qualifying_end([l for l, b in zip(laps[i:], low[i:]) if b], race_len, total_laps)
+            if end is None:
+                continue                    # "most of the race" must hold in race laps, not just clean laps
+            j = i + sum(1 for l in laps[i:] if l <= end)
+            if j - i < need:
+                continue                    # laps after the qualifying point can't make up the lap count
+        if low[i:j].mean() >= MIN_SHARE and float(np.median(mine[i:j])) <= -MIN_FIELD_DROP_KMH:
+            return PowerCut(dn, mate, int(laps[i]), j - i, float(low[i:j].mean()),
+                            float(np.median(diff[i:j])), float(np.median(mine[i:j])))
     return None
 
 

@@ -789,6 +789,9 @@ POWER_CUT_SPAN_CASES = [
     ([3, 4, 5, 13, 20, *range(35, 40)], 60, False),     # sparse short segment hides 27 missing laps
     ([*range(1, 21), *range(32, 43), *range(54, 61)], 60, True),  # more deficit laps can't undo a verdict
     ([*range(3, 12), *range(20, 28), *range(35, 43), *range(50, 61)], 60, True),  # SC + 2 traffic holes
+    ([3, 4, 5, 13, 19, 25, *range(35, 40)], 60, False),  # 3-lap sparse segment: its inside gaps count
+    ([3, 4, 5, 13, 20, 27, *range(35, 40)], 60, False),
+    ([1, 8, 15, 22, 29, 36, 43, 50, 57, 60], 60, False),  # one very sparse segment: 50 laps missing
     ([5, 6, 7, 29, 30, 31, 53, 54, 55, 56], 60, False),  # 42 of 60 laps missing in total
 ]
 
@@ -830,3 +833,15 @@ def test_power_cut_more_evidence_keeps_the_early_start():
     pc = powercut.detect_driver(1, 2, _pc_dev([*range(1, 16), *range(27, 42), *range(53, 61)]),
                                 total_laps=60, last_lap=60)
     assert pc is not None and pc.start_lap == 1
+
+
+def test_power_cut_laps_after_an_over_cap_hole_dont_make_up_the_lap_count():
+    from slipstream import powercut
+    dev = _pc_dev([5, 6, 7, *range(29, 35), 58, 59, 60])
+    assert powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=60) is None
+
+
+def test_power_cut_sparse_early_retirement_is_rejected():
+    from slipstream import powercut
+    dev = _pc_dev([1, 8, 9, 10, 11, 12, 19], healthy_laps=(2, 3, 4))
+    assert powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=20) is None
