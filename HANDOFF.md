@@ -49,6 +49,7 @@ and the Antigravity CLI (`agy`) logged in.
    **Every run replaces the whole site** — list every race you want online.
    It builds the race data inside the Action (never committed) and publishes `web/`.
 3. Site URL: `https://miami05.github.io/slipstreamlab/`.
+**Decision (Ledio, 2026-11-23): wait for the Qatar/Abu Dhabi validation before deploying.**
 Not done yet on purpose: 6 of 15 checkable findings were wrong before the fixes and the fixes
 are only proven on the same 4 races.
 
