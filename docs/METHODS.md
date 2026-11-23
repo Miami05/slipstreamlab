@@ -177,9 +177,10 @@ while our detector said "battery".
    lap table, so a car that retires with the problem counts and a teammate who finishes doesn't
    stretch it). The deficit laps are split into segments wherever more than 5 laps (or 10 % of
    the race) are missing; shorter holes (traffic, a pit stop, one healthy lap) are normal.
-   Segments of fewer than 3 laps are treated as noise, and the spell may not start on one. Between
-   the remaining segments no more than 35 % of the full race distance may be missing (room for a
-   safety car or red flag, also for a car that later retires). So a deficit that only shows in the
+   The spell may not start on a segment of fewer than 3 laps, and short segments after the last
+   long one are ignored as noise (short ones in between still count as evidence). In total, no
+   more than 35 % of the full race distance may be missing between segments (room for a safety
+   car or red flag), and never more than half of the laps the driver actually raced. So a deficit that only shows in the
    last 10 laps, or a few early laps plus a late spell, is not "most of the race". Without intervals
    data there is no verdict at all (tow laps cannot be left out).
 4. A `battery_low` finding of that driver from that lap on becomes `power_cut` with the label

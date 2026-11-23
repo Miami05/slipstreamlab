@@ -15,8 +15,9 @@ TEAMMATE's (same lap, so wind and track state cancel) and with the field's media
 * that spell must cover at least half of the driver's shared clean laps AND, from its first to its
   last deficit lap, at least half of the laps the DRIVER raced (from the lap table, so a car that
   retires with the problem counts). Deficit laps are split into segments at holes of more than
-  5 laps / 10 % of the race; segments under 3 laps are noise (and the spell may not start on one);
-  between the rest no more than 35 % of the full race may be missing;
+  5 laps / 10 % of the race; the spell may not start on a segment under 3 laps, short segments
+  after the last long one are noise; in total no more than 35 % of the full race (and no more
+  than half the laps the driver raced) may be missing between segments;
 * without intervals data traffic cannot be filtered, so there is no verdict at all.
 
 Any `battery_low` finding of that driver from that lap on is then relabelled `power_cut`.
@@ -83,11 +84,12 @@ def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int 
 
     1. Split the deficit laps into segments wherever more than max(5, 10 % of the race) laps are
        missing (traffic, a pit stop or one healthy lap are normal and don't split).
-    2. Segments shorter than MIN_SIDE_LAPS are noise and are dropped, except that the spell may not
-       START on one (so a few isolated early laps can't pull the start forward).
-    3. Between the remaining segments no more than MAX_HOLE_SHARE of the race may be missing
-       (room for a safety car or red flag); the race here is the full distance, so a car that
-       retires is not penalised for a normal safety car.
+    2. The spell may not START on a segment shorter than MIN_SIDE_LAPS (so a few isolated early
+       laps can't pull the start forward); short segments AFTER the last long one are noise.
+       Short segments between long ones count as evidence.
+    3. In TOTAL, no more than MAX_HOLE_SHARE of the full race distance may be missing between the
+       segments (room for a safety car or red flag), and never more than (1 - MIN_COVERAGE) of the
+       laps the driver raced (so a car that retires early isn't judged on two far-apart islands).
     4. First to last remaining deficit lap covers >= MIN_COVERAGE of race_len, the laps the DRIVER
        raced (a car that retires with the problem counts).
     All review cases that shaped this rule: tests/test_review_fixes.py, POWER_CUT_SPAN_CASES.
@@ -105,10 +107,12 @@ def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int 
     segments.append(cur)
     if len(segments[0]) < MIN_SIDE_LAPS:
         return False                        # the spell must not start on noise
-    kept = [seg for seg in segments if len(seg) >= MIN_SIDE_LAPS]
-    for left, right in zip(kept, kept[1:]):
-        if right[0] - left[-1] - 1 > MAX_HOLE_SHARE * distance:
-            return False
+    last_long = max(i for i, seg in enumerate(segments) if len(seg) >= MIN_SIDE_LAPS)
+    kept = segments[: last_long + 1]        # short segments BETWEEN long ones are evidence; trailing ones noise
+    missing = sum(right[0] - left[-1] - 1 for left, right in zip(kept, kept[1:]))
+    max_missing = min(MAX_HOLE_SHARE * distance, (1 - MIN_COVERAGE) * race_len)
+    if missing > max_missing:
+        return False
     return kept[-1][-1] - kept[0][0] + 1 >= MIN_COVERAGE * race_len
 
 
