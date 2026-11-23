@@ -16,7 +16,7 @@ Start with [README.md](README.md), then [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 | Social images/videos (1080×1920, safe zones) | ✅ PNG + MP4 (H.264, bundled ffmpeg via imageio-ffmpeg; GIF only as fallback) |
 | Tests | ✅ pytest (no network) + Node tests; CI in `.github/workflows/tests.yml` |
 | Real-world validation | ⚠️ 4 races checked: after fixes 5 of 6 wrong causes removed, 9 of 9 plausible kept. See [docs/VALIDATION.md](docs/VALIDATION.md) |
-| Code review | Fable + Neon (Gemini) + Sol verify — workflow `.claude/workflows/slipstream-review.js`. 13 rounds done (Fable + Neon + Sol each time); every confirmed finding is fixed and every edge case is a test. Reviewed through `eb4f1fa`; the final round found only 2 wording issues (fixed). Next review: `{"base": "4e0d24b"}`. |
+| Code review | Fable + Neon (Gemini) + Sol verify — workflow `.claude/workflows/slipstream-review.js`. 13 rounds done (Fable + Neon + Sol each time); every confirmed finding is fixed and every edge case is a test. Final round (base `eb4f1fa`, Fable + Neon, both completed): 0 confirmed findings. Next review: base = the commit after this one. |
 | Hosting | ⏸️ ready but switched off on purpose: `.github/workflows/pages.yml` (manual trigger only). See "Deploying" below. |
 
 ## Key decisions (and why)
