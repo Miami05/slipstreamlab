@@ -156,6 +156,13 @@ We call it "probably", never "certainly". Short falls (< 8 km/h) are ignored.
 
 ## Had less power for most of the race (`power_cut`)
 
+> **Switched off (2026-11-23).** Twelve review rounds kept finding edge cases where a few
+> scattered laps could produce a false "probably a car problem" claim. The rule never fired on a
+> real 2026 race, and the one real case we know (Gasly, Las Vegas: engine power turned down for
+> heat) is not visible in the public data. So the pipeline doesn't publish `power_cut` until a
+> real race shows a clear case and the rule is re-validated on it. The method below is kept for
+> that day; its review edge cases are tests in `tests/test_review_fixes.py`.
+
 A battery that runs low costs speed for a few laps. An engine that is turned down (heat, a
 fault) costs speed on *most* laps. Las Vegas 2026 showed why we need to tell them apart: Gasly
 lost power on "most of the 50 laps" because Alpine turned the engine down to manage temperatures,

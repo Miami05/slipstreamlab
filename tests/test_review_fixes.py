@@ -605,7 +605,9 @@ def test_power_cut_needs_the_spell_to_cover_half_the_shared_clean_laps():
     assert set(powercut.detect(dev, {3: 4, 4: 3})) == {3}
 
 
-def test_power_cut_gives_no_verdict_without_intervals():
+def test_power_cut_gives_no_verdict_without_intervals(monkeypatch):
+    from slipstream import powercut as _pc
+    monkeypatch.setattr(_pc, "ENABLED", True)   # the detector is off in the pipeline; test it directly
     from slipstream import powercut
     from tests.test_accuracy_fixes import fleet_feats, teams_rd
     rd = teams_rd()
@@ -871,3 +873,10 @@ def test_span_helper_rejects_trivial_input():
     assert powercut._spans_most_of_race([5], 60) is False
     assert powercut._spans_most_of_race([], 60) is False
     assert powercut._spans_most_of_race([5, 6, 7], 0) is False
+
+
+def test_power_cut_is_switched_off_in_the_pipeline():
+    from slipstream import powercut
+    ctx = {"feats": {"x": 1}, "straights": []}
+    assert powercut.ENABLED is False
+    assert powercut.apply(None, [], ctx, traffic={}) == {} and ctx["power_cuts"] == {}

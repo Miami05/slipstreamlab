@@ -189,8 +189,20 @@ def detect(dev: dict, mates: dict[int, int | None], skip=frozenset(), total_laps
     return out
 
 
+# SWITCHED OFF (2026-11-23). Twelve review rounds kept finding edge cases where a few scattered
+# laps could produce a false "probably a car problem" claim, the rule never fired on any real 2026
+# race, and the one real case (Gasly, Las Vegas: engine turned down for heat) is not visible in the
+# public data at all. Principle: when in doubt, don't claim a car problem. The detector and all
+# review cases stay in the code and tests; turn this on only after a real race shows a clear case
+# and the rule is re-validated on it (see docs/VALIDATION.md).
+ENABLED = False
+
+
 def apply(rd, findings: list, ctx: dict, traffic: dict | None = None) -> dict[int, PowerCut]:
     """Mark battery_low findings that fall inside a sustained power loss (finding.detail["power_cut"])."""
+    if not ENABLED:
+        ctx["power_cuts"] = {}
+        return {}
     if not ctx.get("feats"):
         return {}
     if traffic is None:

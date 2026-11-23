@@ -432,7 +432,9 @@ def test_traffic_laps_are_skipped_and_too_few_clean_laps_mean_no_verdict():
     assert powercut.detect(powercut.lap_deviation(tow, None), {3: 4, 4: 3}, skip_tow) == {}
 
 
-def test_a_battery_finding_after_the_power_loss_started_is_relabelled_but_not_one_before_it():
+def test_a_battery_finding_after_the_power_loss_started_is_relabelled_but_not_one_before_it(monkeypatch):
+    from slipstream import powercut as _pc
+    monkeypatch.setattr(_pc, "ENABLED", True)   # the detector is off in the pipeline; test it directly
     rd = teams_rd()
     ctx = {"feats": fleet_feats(cut=(3, 10, 15.0)), "straights": []}
     mk = lambda lap, conf="medium": energy.Finding("battery_low", 3, lap, [lap], 0, 25.0, conf, "speed fell",

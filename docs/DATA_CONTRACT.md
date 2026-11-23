@@ -79,6 +79,8 @@ by the session's `gmt_offset`), so a Saturday-night race in Las Vegas is
 ```
 
 - `kind` is one of `battery_low`, `energy_saving`, `tyre_wear`, `power_cut`.
+  **`power_cut` is currently switched off in the pipeline** (`slipstream/powercut.py`, `ENABLED = False`);
+  the website and validator still accept it so it can be switched back on without a contract change.
   Website labels: `battery_low` → "Lost power (maybe battery)",
   `energy_saving` → "Lifted off early (probably saving energy or cooling the car)",
   `tyre_wear` → "Tyres probably wore out",

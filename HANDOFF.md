@@ -54,6 +54,8 @@ are only proven on the same 4 races.
 
 ## Known limitations
 - Engine power cuts (Gasly, Las Vegas) can't be told apart from battery limits in public data.
+  The `power_cut` detector is **switched off** (`slipstream/powercut.py`, `ENABLED = False`) after
+  12 review rounds of edge cases; it never fired on a real race. Re-enable only after a real case.
 - What-if only moves **green-flag** stops and skips rain-tyre changes (Las Vegas and São Paulo: none qualify → the page explains why).
 - Red flags are detected from real Mexico 2026 message formats; other formats may differ.
 - Some feeds are degraded (Budapest: repeated samples) → fewer findings there.
