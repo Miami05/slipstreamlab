@@ -79,11 +79,13 @@ MAX_HOLE_SHARE = 0.35  # no hole between deficit laps longer than this share of 
 SMALL_GAP_SHARE = 0.10 # holes up to max(5 laps, this share) are normal (traffic, pit, one healthy lap)
 
 
-def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int | None = None) -> bool:
-    return _qualifying_end(deficit_laps, race_len, total_laps) is not None
+def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int | None = None,
+                        healthy=None) -> bool:
+    return _qualifying_end(deficit_laps, race_len, total_laps, healthy) is not None
 
 
-def _qualifying_end(deficit_laps: list[int], race_len: int, total_laps: int | None = None) -> int | None:
+def _qualifying_end(deficit_laps: list[int], race_len: int, total_laps: int | None = None,
+                    healthy=None) -> int | None:
     """The deficit (measured on the laps that show it) covers most of the distance the driver raced.
 
     1. Split the deficit laps into segments wherever more than max(5, 10 % of the race) laps are
@@ -100,7 +102,7 @@ def _qualifying_end(deficit_laps: list[int], race_len: int, total_laps: int | No
     All review cases that shaped this rule: tests/test_review_fixes.py, POWER_CUT_SPAN_CASES.
     """
     if len(deficit_laps) < 2 or not race_len:
-        return False
+        return None
     distance = total_laps or race_len
     small = max(5, SMALL_GAP_SHARE * distance)
     segments, cur = [], [deficit_laps[0]]
@@ -115,8 +117,13 @@ def _qualifying_end(deficit_laps: list[int], race_len: int, total_laps: int | No
     need = MIN_COVERAGE * race_len
     max_missing = min(MAX_HOLE_SHARE * distance, (1 - MIN_COVERAGE) * race_len)
 
-    def inside(seg):                        # laps missing INSIDE a segment count too
-        return sum(b - a - 1 for a, b in zip(seg, seg[1:]))
+    def inside(seg):
+        # Inside a segment only real HEALTHY clean laps count as missing; laps that are merely absent
+        # (traffic-filtered) don't, or a continuous deficit would slide its start lap forward.
+        # Without the healthy set (unit tests of the span rule alone) every absent lap counts.
+        if healthy is None:
+            return sum(b - a - 1 for a, b in zip(seg, seg[1:]))
+        return sum(1 for l in range(seg[0], seg[-1] + 1) if l in healthy)
 
     start, end = segments[0][0], segments[0][-1]
     missing = inside(segments[0])
@@ -153,13 +160,15 @@ def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: i
     for i in range(0, len(laps) - need + 1):
         if not low[i]:
             continue                        # the spell starts on a lap that shows the deficit
-        j = len(laps)                       # evidence = clean laps up to where the span rule is met
+        # The span rule is only a GATE. The verdict itself is judged on ALL remaining clean laps
+        # ("70 % of the remaining laps"), so a car that recovers later is not called a car problem.
+        j = len(laps)
         if race_len:
-            end = _qualifying_end([l for l, b in zip(laps[i:], low[i:]) if b], race_len, total_laps)
+            healthy = {l for l, b in zip(laps[i:], low[i:]) if not b}
+            end = _qualifying_end([l for l, b in zip(laps[i:], low[i:]) if b], race_len, total_laps, healthy)
             if end is None:
                 continue                    # "most of the race" must hold in race laps, not just clean laps
-            j = i + sum(1 for l in laps[i:] if l <= end)
-            if j - i < need:
+            if sum(1 for l in laps[i:] if l <= end) < need:
                 continue                    # laps after the qualifying point can't make up the lap count
         if low[i:j].mean() >= MIN_SHARE and float(np.median(mine[i:j])) <= -MIN_FIELD_DROP_KMH:
             return PowerCut(dn, mate, int(laps[i]), j - i, float(low[i:j].mean()),

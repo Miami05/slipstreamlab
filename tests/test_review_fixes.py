@@ -841,7 +841,33 @@ def test_power_cut_laps_after_an_over_cap_hole_dont_make_up_the_lap_count():
     assert powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=60) is None
 
 
-def test_power_cut_sparse_early_retirement_is_rejected():
+def test_power_cut_sparse_early_retirement_is_decided_by_the_70_percent_rule():
     from slipstream import powercut
-    dev = _pc_dev([1, 8, 9, 10, 11, 12, 19], healthy_laps=(2, 3, 4))
-    assert powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=20) is None
+    # Absent (traffic) laps are not evidence against him: 7 of 10 clean laps down = exactly 70 %.
+    at_threshold = _pc_dev([1, 8, 9, 10, 11, 12, 19], healthy_laps=(2, 3, 4))
+    assert powercut.detect_driver(1, 2, at_threshold, total_laps=60, last_lap=20) is not None
+    # One more healthy clean lap (7 of 11 = 64 %) and there is no verdict.
+    below = _pc_dev([1, 8, 9, 10, 11, 12, 19], healthy_laps=(2, 3, 4, 13))
+    assert powercut.detect_driver(1, 2, below, total_laps=60, last_lap=20) is None
+
+
+def test_power_cut_not_claimed_when_the_car_recovers():
+    from slipstream import powercut
+    for deficit in (range(1, 31), range(1, 36), range(10, 41)):
+        healthy = [l for l in range(1, 61) if l not in deficit]
+        dev = _pc_dev(deficit, healthy_laps=healthy)
+        assert powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=60) is None, deficit
+
+
+def test_power_cut_traffic_gaps_do_not_slide_the_start_lap():
+    from slipstream import powercut
+    dev = _pc_dev(range(1, 61, 2))                    # only odd laps clean (even laps in traffic)
+    pc = powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=60)
+    assert pc is not None and pc.start_lap == 1
+
+
+def test_span_helper_rejects_trivial_input():
+    from slipstream import powercut
+    assert powercut._spans_most_of_race([5], 60) is False
+    assert powercut._spans_most_of_race([], 60) is False
+    assert powercut._spans_most_of_race([5, 6, 7], 0) is False

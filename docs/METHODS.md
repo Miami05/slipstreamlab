@@ -180,9 +180,11 @@ while our detector said "battery".
    The spell may not start on a segment of fewer than 3 laps, and short segments never bridge a
    hole (their laps count as missing). Walking from the start, the spell must reach half of the
    laps the driver raced while no more than 35 % of the full race distance (and never more than
-   half of his own laps) is missing in total — every missing lap counts, inside segments too; the
-   first point where that holds decides, so more deficit laps later can't undo it, and only the
-   clean laps up to that point count towards the minimum of 10. **Principle: when in doubt, don't claim a car problem** — a
+   half of his own laps) is missing in total (between segments every lap counts; inside a segment
+   only real healthy clean laps do, not laps skipped for traffic). This span check is only a
+   gate: the verdict itself still needs >= 70 % of ALL remaining clean laps to show the deficit,
+   so a car that recovers later is not called a car problem, and the clean laps up to the point
+   where the span is met must number at least 10. **Principle: when in doubt, don't claim a car problem** — a
    missed power cut leaves the finding as "Lost power (maybe battery)", a false one states
    something wrong. Every edge case raised in review is a row in `POWER_CUT_SPAN_CASES`. So a deficit that only shows in the
    last 10 laps, or a few early laps plus a late spell, is not "most of the race". Without intervals
