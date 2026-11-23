@@ -15,9 +15,9 @@ TEAMMATE's (same lap, so wind and track state cancel) and with the field's media
 * that spell must cover at least half of the driver's shared clean laps AND, from its first to its
   last deficit lap, at least half of the laps the DRIVER raced (from the lap table, so a car that
   retires with the problem counts). Deficit laps are split into segments at holes of more than
-  5 laps / 10 % of the race; the spell may not start on a segment under 3 laps, short segments
-  after the last long one are noise; in total no more than 35 % of the full race (and no more
-  than half the laps the driver raced) may be missing between segments;
+  5 laps / 10 % of the race; the spell may not start on a segment under 3 laps and short segments
+  never bridge a hole; walking from the start, the spell must reach half the laps the driver raced
+  with no more than 35 % of the full race (and half his own laps) missing in total;
 * without intervals data traffic cannot be filtered, so there is no verdict at all.
 
 Any `battery_low` finding of that driver from that lap on is then relabelled `power_cut`.
@@ -84,14 +84,14 @@ def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int 
 
     1. Split the deficit laps into segments wherever more than max(5, 10 % of the race) laps are
        missing (traffic, a pit stop or one healthy lap are normal and don't split).
-    2. The spell may not START on a segment shorter than MIN_SIDE_LAPS (so a few isolated early
-       laps can't pull the start forward); short segments AFTER the last long one are noise.
-       Short segments between long ones count as evidence.
-    3. In TOTAL, no more than MAX_HOLE_SHARE of the full race distance may be missing between the
-       segments (room for a safety car or red flag), and never more than (1 - MIN_COVERAGE) of the
-       laps the driver raced (so a car that retires early isn't judged on two far-apart islands).
-    4. First to last remaining deficit lap covers >= MIN_COVERAGE of race_len, the laps the DRIVER
-       raced (a car that retires with the problem counts).
+    2. The spell may not START on a segment shorter than MIN_SIDE_LAPS. Short segments never bridge
+       a hole: their laps count as missing (principle: when in doubt, don't claim a car problem -
+       a missed power cut leaves the finding as "maybe battery", a false one states something wrong).
+    3. Walk the long segments from the start, adding up the laps missing between them. Answer yes
+       at the FIRST point where first..current covers >= MIN_COVERAGE of race_len (the laps the
+       DRIVER raced, so a car that retires with the problem counts) while no more than
+       min(MAX_HOLE_SHARE of the full race, (1 - MIN_COVERAGE) of race_len) laps are missing.
+       Answering at the first such point means more deficit laps later can never undo a verdict.
     All review cases that shaped this rule: tests/test_review_fixes.py, POWER_CUT_SPAN_CASES.
     """
     if len(deficit_laps) < 2 or not race_len:
@@ -107,13 +107,21 @@ def _spans_most_of_race(deficit_laps: list[int], race_len: int, total_laps: int 
     segments.append(cur)
     if len(segments[0]) < MIN_SIDE_LAPS:
         return False                        # the spell must not start on noise
-    last_long = max(i for i, seg in enumerate(segments) if len(seg) >= MIN_SIDE_LAPS)
-    kept = segments[: last_long + 1]        # short segments BETWEEN long ones are evidence; trailing ones noise
-    missing = sum(right[0] - left[-1] - 1 for left, right in zip(kept, kept[1:]))
+    need = MIN_COVERAGE * race_len
     max_missing = min(MAX_HOLE_SHARE * distance, (1 - MIN_COVERAGE) * race_len)
-    if missing > max_missing:
-        return False
-    return kept[-1][-1] - kept[0][0] + 1 >= MIN_COVERAGE * race_len
+    start, end, missing = segments[0][0], segments[0][-1], 0
+    if end - start + 1 >= need:
+        return True
+    for seg in segments[1:]:
+        if len(seg) < MIN_SIDE_LAPS:
+            continue                        # short segments never bridge: their laps count as missing
+        missing += seg[0] - end - 1
+        if missing > max_missing:
+            return False
+        end = seg[-1]
+        if end - start + 1 >= need:
+            return True                     # first point where most of the race is covered: more laps can't undo it
+    return False
 
 
 def detect_driver(dn: int, mate: int, dev: dict, skip=frozenset(), total_laps: int | None = None,

@@ -177,10 +177,13 @@ while our detector said "battery".
    lap table, so a car that retires with the problem counts and a teammate who finishes doesn't
    stretch it). The deficit laps are split into segments wherever more than 5 laps (or 10 % of
    the race) are missing; shorter holes (traffic, a pit stop, one healthy lap) are normal.
-   The spell may not start on a segment of fewer than 3 laps, and short segments after the last
-   long one are ignored as noise (short ones in between still count as evidence). In total, no
-   more than 35 % of the full race distance may be missing between segments (room for a safety
-   car or red flag), and never more than half of the laps the driver actually raced. So a deficit that only shows in the
+   The spell may not start on a segment of fewer than 3 laps, and short segments never bridge a
+   hole (their laps count as missing). Walking from the start, the spell must reach half of the
+   laps the driver raced while no more than 35 % of the full race distance (and never more than
+   half of his own laps) is missing in total; the first point where that holds decides, so more
+   deficit laps later can't undo it. **Principle: when in doubt, don't claim a car problem** — a
+   missed power cut leaves the finding as "Lost power (maybe battery)", a false one states
+   something wrong. Every edge case raised in review is a row in `POWER_CUT_SPAN_CASES`. So a deficit that only shows in the
    last 10 laps, or a few early laps plus a late spell, is not "most of the race". Without intervals
    data there is no verdict at all (tow laps cannot be left out).
 4. A `battery_low` finding of that driver from that lap on becomes `power_cut` with the label

@@ -784,7 +784,11 @@ POWER_CUT_SPAN_CASES = [
     ([5, 6, 7, 28] + list(range(49, 61)), 60, False),   # one noisy lap can't bridge a huge hole
     (list(range(20, 44)) + [49, 50], 50, True),         # exactly 5 missing laps doesn't split (span flips if it did)
     ([1, 2] + list(range(8, 35)), 50, True),            # 5-lap hole after a 2-lap start isn't a split either
-    ([*range(3, 11), 18, 19, 27, 28, *range(36, 61)], 60, True),  # short clean pairs mid-race are evidence
+    ([*range(3, 11), 18, 19, 27, 28, *range(36, 61)], 60, False),  # short pairs don't bridge (safe miss)
+    ([5, 6, 7, 18, *range(30, 61)], 60, False),         # one stray lap can't bridge a 22-lap hole
+    ([3, 4, 5, 13, 20, *range(35, 40)], 60, False),     # sparse short segment hides 27 missing laps
+    ([*range(1, 21), *range(32, 43), *range(54, 61)], 60, True),  # more deficit laps can't undo a verdict
+    ([*range(3, 12), *range(20, 28), *range(35, 43), *range(50, 61)], 60, True),  # SC + 2 traffic holes
     ([5, 6, 7, 29, 30, 31, 53, 54, 55, 56], 60, False),  # 42 of 60 laps missing in total
 ]
 
@@ -812,3 +816,17 @@ def test_power_cut_start_lap_skips_an_isolated_early_lap():
 def test_red_sentence_keeps_a_merged_earlier_stoppage():
     two = story.red_sentence([39, 40, 41], abandoned_lap=40)
     assert "more than once" in two and "39" in two and "lap 40" in two
+
+
+def test_power_cut_start_is_not_pulled_forward_by_a_stray_lap():
+    from slipstream import powercut
+    dev = _pc_dev([5, 6, 7, 18, *range(30, 61)], healthy_laps=(12, 24))
+    pc = powercut.detect_driver(1, 2, dev, total_laps=60, last_lap=60)
+    assert pc is not None and pc.start_lap == 30
+
+
+def test_power_cut_more_evidence_keeps_the_early_start():
+    from slipstream import powercut
+    pc = powercut.detect_driver(1, 2, _pc_dev([*range(1, 16), *range(27, 42), *range(53, 61)]),
+                                total_laps=60, last_lap=60)
+    assert pc is not None and pc.start_lap == 1
