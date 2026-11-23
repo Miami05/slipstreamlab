@@ -63,6 +63,15 @@ are only proven on the same 4 races.
 - 0 findings are "confirmed" yet — most are "plausible". Post-race quotes rarely name a lap.
 - Depends on OpenF1 staying free; the client is isolated in `slipstream/openf1.py`.
 
+## Scheduled validation (cloud routines, no connectors attached)
+- **30 Nov 2026, 10:00 Berlin** — Qatar (round 22): https://claude.ai/code/routines/trig_01TtN4TASHmD26Rpk7KSvyyk
+- **7 Dec 2026, 10:00 Berlin** — Abu Dhabi (round 23): https://claude.ai/code/routines/trig_016hXJQCqWaUgB7NfepBXYFE
+
+Each builds the race, checks every finding against post-race quotes (Claude web search — Gemini
+Hydrogen only exists on the local Mac), updates VALIDATION.md + `tests/validation_cases.json`, and
+opens a pull request (`validation/qatar-2026`, `validation/abu-dhabi-2026`). They never deploy.
+The Abu Dhabi PR ends with a GO LIVE / NOT YET recommendation.
+
 ## Next steps (suggested order)
 1. Validate 2–3 more races (Qatar 29 Nov, Abu Dhabi 6 Dec) with the Gemini Hydrogen researcher; add cases to `tests/validation_cases.json`.
 2. Only share publicly once wrong causes stay rare across those races.
